@@ -4,15 +4,12 @@ Issue #131 was that ``post_chatter_note`` forwarded the message options as a
 trailing *positional* dict, which Odoo's keyword-only ``message_post`` rejects
 with ``TypeError``. That helper is already fixed (options are forwarded as
 ``execute`` keyword arguments) and a helper-level regression lives in
-``tests/test_utilities/test_odoo_helpers.py``
+``tests/test_services/test_odoo_helpers.py``
 (``test_drives_keyword_only_message_post_without_type_error``).
 
 These tests are *complementary*: instead of calling the helper directly, they
 drive each chatter-posting command (``task_note``, ``task_question``)
-end-to-end against a keyword-only ``message_post`` fake executor. ``start_task``
-and ``resume_task`` are no longer covered here because they post no chatter note
-at all as of #505 — the only remaining callers are the two that post genuine,
-caller-supplied content. The real (un-patched) ``post_chatter_note`` runs
+end-to-end against a keyword-only ``message_post`` fake executor. The real (un-patched) ``post_chatter_note`` runs
 inside each command, so a regression to a positional options dict would surface
 here as a ``TypeError`` raised from the fake executor — proving every caller,
 not just the helper in isolation, drives ``message_post`` with keyword options.
@@ -22,22 +19,14 @@ import tempfile
 import unittest
 from pathlib import Path
 from typing import Any
-from unittest.mock import patch
 
 from odoo_client.client import OdooClient
-from odoo_client.commands.builtin.resume_task import ResumeTaskCommand
-from odoo_client.commands.builtin.start_task import StartTaskCommand
 from odoo_client.commands.builtin.task_note import TaskNoteCommand
 from odoo_client.commands.command import MAX_CHATTER_BODY_CHARS
 from odoo_client.commands.builtin.task_question import TaskQuestionCommand
 from odoo_client.state import LocalStateClient as TaskStateDB
 from odoo_client.transport.executor import OdooExecutor
 from tests.support import make_state_db
-
-_NOTE_GUARD = "odoo_client.commands.builtin.task_note.assert_sdk_configured"
-_QUESTION_GUARD = "odoo_client.commands.builtin.task_question.assert_sdk_configured"
-_RESUME_GUARD = "odoo_client.commands.builtin.resume_task.assert_sdk_configured"
-_START_GUARD = "odoo_client.commands.builtin.start_task.assert_sdk_configured"
 
 
 class _KeywordOnlyMessagePostExecutor(OdooExecutor):
@@ -49,14 +38,12 @@ class _KeywordOnlyMessagePostExecutor(OdooExecutor):
     dict (the #131 bug) would reach ``_message_post`` as a second positional
     argument and raise ``TypeError`` — reproducing the server-side crash locally.
     Modelled on the executor of the same name in
-    ``tests/test_utilities/test_odoo_helpers.py``.
+    ``tests/test_services/test_odoo_helpers.py``.
     """
 
     def __init__(self) -> None:
         self.recorded: dict[str, Any] = {}
         self.created_attachments: list[dict[str, Any]] = []
-        # Real executors expose ``uid``; ``start_task`` reads ``client.uid`` when
-        # resolving the employee id, so the fake must carry one too.
         self.uid = 7
 
     def execute(self, model: str, method: str, *args: Any, **kwargs: Any) -> Any:
@@ -65,6 +52,9 @@ class _KeywordOnlyMessagePostExecutor(OdooExecutor):
         if (model, method) == ("ir.attachment", "create"):
             self.created_attachments.append(args[0])
             return 400 + len(self.created_attachments)
+        # Both commands resolve the task (its name) before posting.
+        if (model, method) == ("project.task", "search_read"):
+            return [{"id": 1, "name": "Bug"}]
         if (model, method) != ("project.task", "message_post"):
             raise AssertionError(f"unexpected call: {model}.{method}")
         return self._message_post(*args, **kwargs)
@@ -128,44 +118,16 @@ class TestChatterCallersDriveKeywordOnlyMessagePost(unittest.TestCase):
             },
         )
 
-    def test_start_task_posts_no_chatter_note(self):
-        # #505: the contentless "Work started on this task." marker is gone, so
-        # the command never reaches ``message_post`` at all.
-        client, executor = _keyword_client()
-        db = _tmp_db()
-        with patch(_START_GUARD):
-            StartTaskCommand(client, state=db).execute(
-                task_id=10,
-                task_name="Fix VAT",
-                project_id=5,
-                project_name="Accounting",
-            )
-        self.assertEqual(executor.recorded, {})
-
-    def test_resume_task_posts_no_chatter_note(self):
-        # #505: the contentless "Resuming implementation…" marker is gone.
-        client, executor = _keyword_client()
-        db = _tmp_db()
-        db.create_run(1, "Bug", 10, "Project A", timesheet_id=1)
-        db.transition_to_awaiting(1)
-        with patch(_RESUME_GUARD):
-            ResumeTaskCommand(client, state=db).execute(1)
-        self.assertEqual(executor.recorded, {})
-
     def test_task_note_drives_keyword_only_message_post(self):
         client, executor = _keyword_client()
         db = _tmp_db()
-        db.create_run(1, "Bug", 10, "Project A", timesheet_id=1)
-        with (patch(_NOTE_GUARD),):
-            TaskNoteCommand(client, state=db).execute(1, "Note text")
+        TaskNoteCommand(client, state=db).execute(1, "Note text")
         self._assert_recorded_keyword(executor, task_id=1, body="<p>Note text</p>")
 
     def test_task_question_drives_keyword_only_message_post(self):
         client, executor = _keyword_client()
         db = _tmp_db()
-        db.create_run(1, "Bug", 10, "Project A", timesheet_id=1)
-        with (patch(_QUESTION_GUARD),):
-            TaskQuestionCommand(client, state=db).execute(1, "Which approach?")
+        TaskQuestionCommand(client, state=db).execute(1, "Which approach?")
         self._assert_recorded_keyword(
             executor, task_id=1, body="<p>[?] Which approach?</p>"
         )
@@ -179,14 +141,12 @@ class TestChatterCallersDriveKeywordOnlyMessagePost(unittest.TestCase):
 
         client, executor = _keyword_client()
         db = _tmp_db()
-        db.create_run(1, "Bug", 10, "Project A", timesheet_id=1)
         content = base64.b64encode(b"findings").decode("ascii")
-        with (patch(_NOTE_GUARD),):
-            result = TaskNoteCommand(client, state=db).execute(
-                1,
-                "Note with file",
-                attachments=[{"content": content, "name": "findings.md"}],
-            )
+        result = TaskNoteCommand(client, state=db).execute(
+            1,
+            "Note with file",
+            attachments=[{"content": content, "name": "findings.md"}],
+        )
         self.assertEqual(len(executor.created_attachments), 1)
         self.assertEqual(executor.created_attachments[0]["name"], "findings.md")
         self.assertEqual(executor.recorded["attachment_ids"], [401])
@@ -198,12 +158,10 @@ class TestChatterCallersDriveKeywordOnlyMessagePost(unittest.TestCase):
         # fake executor never sees a ``message_post`` (or any) call.
         client, executor = _keyword_client()
         db = _tmp_db()
-        db.create_run(1, "Bug", 10, "Project A", timesheet_id=1)
-        with (patch(_NOTE_GUARD),):
-            with self.assertRaises(ValueError):
-                TaskNoteCommand(client, state=db).execute(
-                    1, "x" * (MAX_CHATTER_BODY_CHARS + 1)
-                )
+        with self.assertRaises(ValueError):
+            TaskNoteCommand(client, state=db).execute(
+                1, "x" * (MAX_CHATTER_BODY_CHARS + 1)
+            )
         self.assertEqual(executor.recorded, {})
         self.assertEqual(executor.created_attachments, [])
 

@@ -3,8 +3,7 @@
 This module hosts two kinds of helpers:
 
 * Pure functions (``resolve_many2one``, ``m2o_id``) that accept and return
-  only primitives with no side effects (``format_chatter`` moved to the
-  shared kernel in #717 and is re-exported here).
+  only primitives with no side effects.
 * Thin Odoo-operation wrappers that take an ``OdooClient`` and issue a single
   well-defined call. They keep command bodies free of raw ``client.execute``
   plumbing so business logic reads at one altitude.
@@ -15,15 +14,9 @@ from typing import Any, Optional
 
 from odoo_client.client import OdooClient
 
-# ``format_chatter`` moved to the shared kernel (#717) so the MCP prompt
-# builder can import it without a surface→data edge; re-exported here so the
-# helper keeps its historical import site alongside the other chatter helpers.
-from odoo_client._utils import format_chatter as format_chatter  # noqa: F401
-
-# ``html`` stays behind in ``odoo_client/utilities`` as genuinely shared code
-# (ADR-005 amendment, #717): it is a pure text-conversion module usable from
+# ``_text`` is genuinely shared code: a pure text-conversion module usable from
 # any layer.
-from odoo_client.utilities.html import html_to_markdown, markdown_to_html
+from odoo_client._text import html_to_markdown, markdown_to_html
 
 # Backwards-compatible private alias kept so existing tests that patch
 # ``_html_to_markdown`` on this module continue to resolve.
@@ -205,28 +198,6 @@ def get_task_chatter(
         limit=limit,
     )
     return [shape_chatter_message(m) for m in reversed(messages)]
-
-
-def count_chatter_messages_after(
-    client: OdooClient, task_id: int, message_id: int
-) -> int:
-    """Count a task's chatter messages strictly newer than ``message_id``.
-
-    The read primitive behind ``task_status``'s ``new_messages_since_question``
-    (#625): ``mail.message`` ids are monotonic, so ``id > watermark`` is exactly
-    "posted after the question". A single ``search_count`` — no bodies fetched.
-    """
-    return int(
-        client.execute(
-            "mail.message",
-            "search_count",
-            [
-                ("model", "=", "project.task"),
-                ("res_id", "=", task_id),
-                ("id", ">", message_id),
-            ],
-        )
-    )
 
 
 def search_chatter(

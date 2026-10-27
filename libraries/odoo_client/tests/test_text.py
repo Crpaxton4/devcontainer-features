@@ -2,7 +2,7 @@
 
 import unittest
 
-from odoo_client.utilities.html import html_to_markdown, markdown_to_html
+from odoo_client._text import html_to_markdown, markdown_to_html
 
 
 class TestMarkdownToHtml(unittest.TestCase):

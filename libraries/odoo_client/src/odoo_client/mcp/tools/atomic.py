@@ -300,30 +300,6 @@ def make_search_tasks_tool(registry: Registry):
     return search_tasks
 
 
-@atomic_tool("resume_task")
-def make_resume_task_tool(registry: Registry):
-    def resume_task(task_id: int) -> Dict[str, Any]:
-        """Ensure the task's session is RUNNING (thin alias of start_task's resume path).
-
-        State machine: AWAITING_ANSWERS -> RUNNING; STOPPED (non-aborted) ->
-        RUNNING (reopened in place); already RUNNING -> no-op success. Errors
-        only when no resumable session exists (aborted/CLOSED/none) — use
-        start_task to create one.
-        """
-        return registry["resume_task"].execute(task_id)
-
-    return resume_task
-
-
-@atomic_tool("abort_task")
-def make_abort_task_tool(registry: Registry):
-    def abort_task(task_id: int) -> Dict[str, Any]:
-        """Force-close a wedged session without logging hours; retire its anchor."""
-        return registry["abort_task"].execute(task_id)
-
-    return abort_task
-
-
 @atomic_tool("assign_event")
 def make_assign_event_tool(registry: Registry):
     def assign_event(event_ids: List[int], task_id: int) -> Dict[str, Any]:
@@ -331,24 +307,6 @@ def make_assign_event_tool(registry: Registry):
         return registry["assign_event"].execute(event_ids=event_ids, task_id=task_id)
 
     return assign_event
-
-
-@atomic_tool("discover_runs")
-def make_discover_runs_tool(registry: Registry):
-    def discover_runs(stale_after_hours: float = 12.0) -> List[Dict[str, Any]]:
-        """Discover active runs in the central tracker DB."""
-        return registry["discover_runs"].execute(stale_after_hours=stale_after_hours)
-
-    return discover_runs
-
-
-@atomic_tool("abort_run")
-def make_abort_run_tool(registry: Registry):
-    def abort_run(run_id_or_task_id: int) -> Dict[str, Any]:
-        """Abort a stale run in the central tracker DB and close its Odoo anchor."""
-        return registry["abort_run"].execute(run_id_or_task_id)
-
-    return abort_run
 
 
 @atomic_tool("resync")
@@ -362,20 +320,11 @@ def make_resync_tool(registry: Registry):
 
         Directory-agnostic: git discovers every repo under the cwd and github
         searches account-wide. Optional inclusive ``start``/``end`` ISO dates
-        bound the git/github/odoo capture window (gcal/gmail ignore them).
+        bound the capture window.
         """
         return registry["resync"].execute(sources=sources, start=start, end=end)
 
     return resync
-
-
-@atomic_tool("task_status")
-def make_task_status_tool(registry: Registry):
-    def task_status() -> List[Dict[str, Any]]:
-        """Show all actively tracked tasks with elapsed time."""
-        return registry["task_status"].execute()
-
-    return task_status
 
 
 @atomic_tool("task_note")
@@ -385,7 +334,6 @@ def make_task_note_tool(registry: Registry):
         note: str,
         attachments: Optional[List[Dict[str, Any]]] = None,
         dedupe_key: Optional[str] = None,
-        interim: bool = False,
     ) -> Dict[str, Any]:
         """Post a note (max 500 chars) to the task chatter, optionally with files.
 
@@ -395,12 +343,8 @@ def make_task_note_tool(registry: Registry):
         call with an already-seen key skips the post and returns the existing
         message id.
 
-        ``interim=True`` records the note in the local session log ONLY: no
-        chatter post, no follower notification, no attachments, no dedupe key,
-        and no character limit. Use it for the plan and for checkpoints, and
-        post ONE consolidated non-interim note per run just before stopping —
-        every posted note notifies every follower on the task. Interim notes
-        still appear in the run summary derived at ``stop_task``.
+        Post ONE consolidated note per run just before stopping — every posted
+        note notifies every follower on the task.
 
         Task chatter is CLIENT-VISIBLE, and no tool removes a note or unlinks
         an attachment once posted. Attach only deliverables the client asked
@@ -415,7 +359,6 @@ def make_task_note_tool(registry: Registry):
             note,
             attachments=attachments,
             dedupe_key=dedupe_key,
-            interim=interim,
         )
 
     return task_note
@@ -456,12 +399,10 @@ def make_task_question_tool(registry: Registry):
     def task_question(
         task_id: int, question: str, dedupe_key: Optional[str] = None
     ) -> Dict[str, Any]:
-        """Post a question (max 500 chars) to the task chatter; transitions to AWAITING_ANSWERS.
+        """Post a question (max 500 chars) to the task chatter.
 
-        Records the message id as an answer watermark for task_status's
-        ``new_messages_since_question``. ``dedupe_key`` makes the call
-        idempotent: a retried call with an already-seen key skips the post and
-        returns the existing message id.
+        ``dedupe_key`` makes the call idempotent: a retried call with an
+        already-seen key skips the post and returns the existing message id.
         """
         return registry["task_question"].execute(
             task_id, question, dedupe_key=dedupe_key
@@ -523,42 +464,6 @@ def make_unlogged_time_report_tool(registry: Registry):
         )
 
     return unlogged_time_report
-
-
-@atomic_tool("list_runs")
-def make_list_runs_tool(registry: Registry):
-    def list_runs() -> List[Dict[str, Any]]:
-        """List the active tracker runs with elapsed time."""
-        return registry["list_runs"].execute()
-
-    return list_runs
-
-
-@atomic_tool("report_runs")
-def make_report_runs_tool(registry: Registry):
-    def report_runs(include_stopped: bool = False) -> List[Dict[str, Any]]:
-        """Report tracker runs, optionally including the stopped ones."""
-        return registry["report_runs"].execute(include_stopped=include_stopped)
-
-    return report_runs
-
-
-@atomic_tool("stop_run")
-def make_stop_run_tool(registry: Registry):
-    def stop_run(run_id: int) -> Dict[str, Any]:
-        """Force-stop one tracker run by its SQLite run id."""
-        return registry["stop_run"].execute(run_id)
-
-    return stop_run
-
-
-@atomic_tool("stop_all")
-def make_stop_all_tool(registry: Registry):
-    def stop_all() -> List[Dict[str, Any]]:
-        """Force-stop every active tracker run."""
-        return registry["stop_all"].execute()
-
-    return stop_all
 
 
 @atomic_tool("normalize_timesheets")

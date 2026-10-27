@@ -1,13 +1,17 @@
-import os
 import unittest
 from unittest.mock import MagicMock, patch
 
 from odoo_client.commands.builtin import BUILTIN_COMMANDS
 from odoo_client.mcp import __main__ as entry
-from odoo_client.mcp.tools import GATED_TOOL_NAMES, GATED_TOOLS_ENV
+from odoo_client.mcp.tools import TOOL_FACTORIES
 
 
 class TestMainEntryPoint(unittest.TestCase):
+    def setUp(self):
+        guard = patch("odoo_client.mcp.__main__.assert_configured")
+        self.guard = guard.start()
+        self.addCleanup(guard.stop)
+
     def test_main_builds_default_registry_and_runs(self):
         with (
             patch("odoo_client.mcp.__main__.OdooClient") as MockClient,
@@ -18,6 +22,15 @@ class TestMainEntryPoint(unittest.TestCase):
         MockClient.assert_called_once_with()
         MockServer.assert_called_once()
         MockServer.return_value.run.assert_called_once_with()
+
+    def test_main_checks_the_configuration_first(self):
+        with (
+            patch("odoo_client.mcp.__main__.OdooClient"),
+            patch("odoo_client.mcp.__main__.OdooMCPServer"),
+        ):
+            entry.main()
+
+        self.guard.assert_called_once_with()
 
     def test_main_registers_all_builtins(self):
         with (
@@ -43,38 +56,16 @@ class TestMainEntryPoint(unittest.TestCase):
 
         self.assertIs(MockServer.call_args.kwargs["profiling"], True)
 
-    def test_main_exposes_reduced_default_surface(self):
-        # The server is handed the everyday working set, not all 39 tools: the
-        # gated (maintenance/triage/introspection) tools are held back so the
-        # count stays under the lazy-deferral threshold (#512).
+    def test_main_exposes_every_tool(self):
+        # There is no opt-in gate: the server is handed the whole tool surface.
         with (
             patch("odoo_client.mcp.__main__.OdooClient"),
             patch("odoo_client.mcp.__main__.OdooMCPServer") as MockServer,
-            # Empty (falsy) value keeps the gate closed without clearing the rest
-            # of the environment the entry point's config load depends on.
-            patch.dict(os.environ, {GATED_TOOLS_ENV: ""}),
         ):
             entry.main()
 
         exposed = set(MockServer.call_args.kwargs["explicit_tools"])
-        self.assertEqual(exposed & GATED_TOOL_NAMES, set())
-        self.assertLess(len(exposed), 39)
-        # The composition tools remain reachable on the default surface.
-        self.assertIn("start_task", exposed)
-        self.assertIn("stop_task", exposed)
-
-    def test_main_env_opt_in_exposes_the_gated_tools(self):
-        # Opting in restores the full surface for a session that needs the
-        # maintenance/triage tooling.
-        with (
-            patch("odoo_client.mcp.__main__.OdooClient"),
-            patch("odoo_client.mcp.__main__.OdooMCPServer") as MockServer,
-            patch.dict(os.environ, {GATED_TOOLS_ENV: "1"}),
-        ):
-            entry.main()
-
-        exposed = set(MockServer.call_args.kwargs["explicit_tools"])
-        self.assertLessEqual(GATED_TOOL_NAMES, exposed)
+        self.assertEqual(exposed, set(TOOL_FACTORIES))
 
 
 if __name__ == "__main__":

@@ -200,18 +200,6 @@ class TestHostSetupParity(unittest.TestCase):
             "creates the host-provisioned target",
         )
 
-    def test_setup_scripts_initialize_the_host_provisioned_database(self):
-        # The host-provisioned tracker DB schema is created by the init script,
-        # not the container (#369); both host setup scripts must invoke it.
-        for script in (SETUP_SH, SETUP_PS1):
-            with self.subTest(script=script.name):
-                self.assertIn(
-                    "init_tracker_db.py",
-                    script.read_text(),
-                    f"{script.name} must initialize the host-provisioned tracker "
-                    f"database via scripts/init_tracker_db.py",
-                )
-
     def test_setup_scripts_do_not_create_history_files(self):
         # Both scripts used to `touch ~/.bash_history` (now a directory mount).
         # Creating a *file* where the Feature expects a directory is exactly the

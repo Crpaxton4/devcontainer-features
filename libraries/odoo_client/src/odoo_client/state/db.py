@@ -1,4 +1,4 @@
-"""SQLite-backed FSM state for task time-tracking sessions."""
+"""SQLite-backed state for task time-tracking events and uploads."""
 
 import json
 import os
@@ -12,19 +12,12 @@ from typing import Optional
 
 from odoo_client._utils import as_utc
 
-from .run_sessions import merge_runs
 from .models import (
     AGENTLESS_REPO,
     AGENTLESS_REPO_LABEL,
     AGENTLESS_REPO_SENTINEL,
     EventRecord,
-    InvalidStateTransitionError,
-    SessionSource,
     SessionWindow,
-    TaskAlreadyRunningError,
-    TaskNotRunningError,
-    TaskRun,
-    TaskState,
     TrackerStateMissingError,
     format_repo_label,
 )
@@ -460,59 +453,6 @@ _SESSION_SOURCE_PREDICATE = (
     f"({_DEVELOPMENT_SOURCE_PREDICATE} OR {_REVIEW_SOURCE_PREDICATE})"
 )
 
-#: Payload key under which an event records the task ids it carries ONLY because
-#: those tasks had an active run when it was written — attribution rule 2,
-#: ``--attach-active-run`` (#779). The key is owned by
-#: :class:`~odoo_client.commands.log_event.LogEventCommand`, which is the single
-#: writer of the ``events`` append and the single place that knows WHICH rule
-#: attributed each id; a caller-supplied payload never gets to set it.
-#:
-#: It exists so the reaper's staleness clock can be attachment-independent
-#: (:meth:`LocalStateClient.latest_unattached_event_timestamp_for_task`) without
-#: changing what a row attributes to for BILLING: the id stays in ``task_ids``,
-#: so session derivation, upload, and every report are untouched — only the
-#: liveness question "is anyone still working this run?" reads the marker.
-#: Recorded as the id LIST rather than a boolean because one event can attach to
-#: several runs while explicitly naming another task, and the forgotten run in a
-#: busy container must age out even while its neighbours stay live.
-#:
-#: Per-id attribution provenance in the payload follows the ``unvalidated_task_ids``
-#: precedent (#378 item 1), which likewise keeps ids OUT of the liveness/triage
-#: reading of a row without changing the row's ``task_ids``. Unlike that key this
-#: one is defined here, in the layer that READS it, so the writer and the reader
-#: cannot drift apart on the spelling.
-ATTACHED_TASK_IDS_PAYLOAD_KEY = "attached_run_task_ids"
-
-# The attachment-independent staleness clock (#779), read by the reaper through
-# :meth:`LocalStateClient.latest_unattached_event_timestamp_for_task`. Same shape
-# as the plain latest-event clock — fan the event's ``task_ids`` out with
-# ``json_each`` and take the string ``MAX`` of a uniform UTC isoformat — minus the
-# rows that carry this task id ONLY by attachment. The exclusion is per task id
-# (``attached.value = task_each.value``), not per row: one event can be
-# attachment-only for a forgotten run while explicitly naming another task, and
-# only the forgotten run's clock must ignore it. ``json_valid`` guards the
-# CHECK-less ``payload`` column so a malformed legacy row cannot raise here.
-_LATEST_UNATTACHED_EVENT_SQL = f"""
-SELECT MAX(events.timestamp)
-FROM events, json_each(events.task_ids) AS task_each
-WHERE task_each.value = ?
-  AND NOT EXISTS (
-      SELECT 1
-      FROM json_each(
-          COALESCE(
-              CASE WHEN json_valid(events.payload)
-                   THEN json_extract(
-                       events.payload, '$.{ATTACHED_TASK_IDS_PAYLOAD_KEY}'
-                   )
-              END,
-              '[]'
-          )
-      ) AS attached
-      WHERE attached.value = task_each.value
-  )
-"""
-
-
 # CTE that reproduces the legacy gap-based sessionization directly over ``events``
 # at query time. The inactivity gap is bound at execution (SQLite views cannot
 # take a parameter), so zero materialization/staleness exists for any producer.
@@ -656,7 +596,7 @@ def assert_tracker_db_present(path: Optional[Path] = None) -> None:
     absence is a setup failure with a fixed remedy rather than something to
     recover from. This is the single definition of that check and of its
     message: :meth:`LocalStateClient._raw_connect` calls it just before opening a
-    connection, and :func:`~odoo_client.tracking.env.assert_sdk_configured` calls
+    connection, and :func:`~odoo_client.bootstrap.assert_configured` calls
     it up front so a command fails on its precondition rather than mid-body
     (#642).
 
@@ -695,110 +635,6 @@ def current_repo_label() -> str:
     return "" if label == "(unknown)" else label
 
 
-# Columns selected for every task_run read, in _parse_run order.
-_TASK_RUN_COLUMNS = (
-    "id, task_id, task_name, project_id, project_name, state, "
-    "started_at, stopped_at, timesheet_id, notes, aborted_at, "
-    "question_message_id, run_summary"
-)
-
-# The two live/paused states an "active" run may be in. "Active" is the live
-# pair RUNNING/AWAITING_ANSWERS only; STOPPED (resumable, #504) and CLOSED
-# (terminal) are deliberately excluded, so every lookup and CAS guard built on
-# this literal stays the single-live-run guard the FSM invariants rely on.
-_ACTIVE_STATES_SQL = "('RUNNING', 'AWAITING_ANSWERS')"
-
-# WHERE clause selecting a task's single active run (see _ACTIVE_STATES_SQL).
-_ACTIVE_RUN_WHERE = f"WHERE task_id = ? AND state IN {_ACTIVE_STATES_SQL}"
-
-# WHERE clause selecting a task's most recent reopenable STOPPED run (#504):
-# aborted stopped runs (``aborted_at`` stamped) are voided from billing and NOT
-# resumable; CLOSED runs are terminal and never match.
-_RESUMABLE_RUN_WHERE = (
-    "WHERE task_id = ? AND state = 'STOPPED' AND aborted_at IS NULL "
-    "ORDER BY started_at DESC, id DESC LIMIT 1"
-)
-
-
-def _no_active_session_error(task_id: int) -> TaskNotRunningError:
-    """Return THE no-active-session error — one implementation, one message.
-
-    Every surface that guards on "an active session must exist" — the command
-    layer's ``require_active_run``, :meth:`LocalStateClient.require_active_run`,
-    and the CAS write paths below — raises this same error with this same
-    message (#627), so callers and tests never see divergent wordings for the
-    same condition.
-    """
-    return TaskNotRunningError(f"No active session for task {task_id}.")
-
-
-def _fetch_run(
-    conn: sqlite3.Connection, where: str, params: tuple
-) -> Optional[TaskRun]:
-    """Return the single matching task_run using an EXISTING connection, or None.
-
-    The in-transaction sibling of :meth:`LocalStateClient._select_run`: write
-    paths that must read-decide-write atomically (#628) fetch through this on
-    the one connection holding their ``BEGIN IMMEDIATE`` transaction, so the
-    row they decide on cannot change under them.
-    """
-    row = conn.execute(
-        f"SELECT {_TASK_RUN_COLUMNS} FROM task_runs {where}", params
-    ).fetchone()
-    return _parse_run(row) if row else None
-
-
-def _cas_update(
-    conn: sqlite3.Connection, sql: str, params: tuple, error: Exception
-) -> None:
-    """Execute a compare-and-swap UPDATE; raise ``error`` when no row matched.
-
-    State transitions guard their UPDATE with ``WHERE id = ? AND state IN
-    (...)`` (#628): a row already moved out of the admissible states by a
-    concurrent writer matches nothing, and the rowcount-0 outcome maps to the
-    same state error the pre-check raises — never a new exception type — so a
-    lost race is a deterministic, familiar failure rather than a silent
-    overwrite. Under :meth:`LocalStateClient._write_txn`'s ``BEGIN IMMEDIATE``
-    the in-transaction pre-check already holds, making this the belt to that
-    suspender; it fires on its own when a caller CASes without a pre-read.
-    """
-    if conn.execute(sql, params).rowcount == 0:
-        raise error
-
-
-def _parse_run(row: tuple) -> TaskRun:
-    (
-        id_,
-        task_id,
-        task_name,
-        project_id,
-        project_name,
-        state,
-        started_at,
-        stopped_at,
-        timesheet_id,
-        notes_json,
-        aborted_at,
-        question_message_id,
-        run_summary,
-    ) = row
-    return TaskRun(
-        id=id_,
-        task_id=task_id,
-        task_name=task_name,
-        project_id=project_id,
-        project_name=project_name,
-        state=TaskState(state),
-        started_at=datetime.fromisoformat(started_at),
-        stopped_at=datetime.fromisoformat(stopped_at) if stopped_at else None,
-        timesheet_id=timesheet_id,
-        notes=json.loads(notes_json),
-        aborted_at=datetime.fromisoformat(aborted_at) if aborted_at else None,
-        question_message_id=question_message_id,
-        run_summary=run_summary,
-    )
-
-
 # Columns selected for every event read, in EventRecord field order.
 _EVENT_COLUMNS = (
     "id, source, timestamp, task_ids, repo, pr_num, branch, subject, payload, "
@@ -818,17 +654,6 @@ def _normalize_utc_isoformat(ts: datetime) -> str:
     naive sentinels still sort past every real row).
     """
     return as_utc(ts).isoformat()
-
-
-def _coerce_session_source(source: "SessionSource | str") -> SessionSource:
-    """Return ``source`` as a :class:`SessionSource`, or raise :class:`ValueError`."""
-    try:
-        return SessionSource(source)
-    except ValueError:
-        allowed = ", ".join(s.value for s in SessionSource)
-        raise ValueError(
-            f"unknown session source {source!r}; expected one of: {allowed}"
-        ) from None
 
 
 def _derivation_margin(gap_secs: int) -> timedelta:
@@ -963,9 +788,7 @@ def _parse_derived_window(row: tuple) -> SessionWindow:
 class LocalStateClient:
     """SQLite-backed state store for task tracking sessions."""
 
-    def __init__(
-        self, db_path: Optional[Path] = None, *, runs_db: Optional[Path] = None
-    ):
+    def __init__(self, db_path: Optional[Path] = None):
         """Bind to a tracker DB path WITHOUT touching the filesystem (#369).
 
         Construction is inert — no git remote, directory, or schema work. A missing
@@ -974,33 +797,6 @@ class LocalStateClient:
         :func:`tracker_db_path`; tests and callers pass an explicit path.
         """
         self._db_path = Path(db_path) if db_path is not None else tracker_db_path()
-        # The run record (#1065) is a second sessionization source. A client on
-        # the central tracker DB (no ``db_path``) reads ``runs.db`` under the
-        # dispatcher state root. A client given an explicit ``db_path`` reads
-        # the run record only when ``runs_db`` names one, so a test DB or a
-        # per-project client never picks up a stray ``runs.db``. The file is
-        # never created from the read path.
-        self._runs_db = Path(runs_db) if runs_db is not None else None
-        self._runs_enabled = runs_db is not None or db_path is None
-
-    def _runs_overlapping(
-        self, start: datetime, end: datetime, task_id: Optional[str]
-    ) -> list:
-        """Return the run-record rows overlapping ``[start, end)``, or ``[]``.
-
-        Strictly read-only (see :func:`~odoo_client.state.run_sessions.read_runs`):
-        the file is never created, migrated or written. A corrupt or locked file
-        raises rather than silently falling back to the event-store answer.
-        """
-        from .dispatch_state import runs_db_path
-        from .run_sessions import read_runs, to_us
-
-        if not self._runs_enabled:
-            return []
-        explicit = self._runs_db is not None
-        path = self._runs_db if explicit else runs_db_path()
-        runs = read_runs(path, to_us(start), to_us(end), expected=explicit)
-        return [r for r in runs if task_id is None or r.task_id == task_id]
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
@@ -1073,413 +869,6 @@ class LocalStateClient:
         # The current schema declares no foreign keys.
         return conn
 
-    @contextmanager
-    def _write_txn(self) -> Iterator[sqlite3.Connection]:
-        """One immediate-mode write transaction on one connection (#628).
-
-        The write layer's entry point: every logical mutation (create, state
-        transition, note append) runs its checks AND its writes inside a single
-        ``BEGIN IMMEDIATE`` transaction on a single connection. ``IMMEDIATE``
-        acquires SQLite's write lock up front, so with the documented concurrent
-        writers (the claude-event-hook shim, MCP ``_emit_tool_event``, the TUI —
-        see :meth:`_raw_connect`) a read-decide-write sequence in the body can
-        never interleave with another writer: whatever the body reads still
-        holds when its UPDATE lands. A concurrent writer waits on the
-        ``busy_timeout`` rather than seeing intermediate state. Commit on clean
-        exit, rollback on exception, and close-with-checkpoint all come from
-        :meth:`_connect`.
-        """
-        with self._connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            yield conn
-
-    def _select_runs(self, where: str, params: tuple = ()) -> list[TaskRun]:
-        """Run ``SELECT {_TASK_RUN_COLUMNS} FROM task_runs {where}`` and parse rows."""
-        with self._connect() as conn:
-            rows = conn.execute(
-                f"SELECT {_TASK_RUN_COLUMNS} FROM task_runs {where}", params
-            ).fetchall()
-        return [_parse_run(row) for row in rows]
-
-    def _select_run(self, where: str, params: tuple) -> Optional[TaskRun]:
-        """Return the single matching task_run, or None."""
-        with self._connect() as conn:
-            return _fetch_run(conn, where, params)
-
-    def require_active_run(self, task_id: int) -> TaskRun:
-        """Return the active run for ``task_id`` or raise :class:`TaskNotRunningError`.
-
-        The ONE active-session guard (#627): the command layer's
-        ``require_active_run`` delegates here, so every surface (MCP tools, CLI,
-        library callers) raises the same error with the same message.
-        """
-        run = self.get_active_run(task_id)
-        if run is None:
-            raise _no_active_session_error(task_id)
-        return run
-
-    def get_active_run(self, task_id: int) -> Optional[TaskRun]:
-        # See _ACTIVE_STATES_SQL for why STOPPED/CLOSED are excluded.
-        return self._select_run(_ACTIVE_RUN_WHERE, (task_id,))
-
-    def get_resumable_run(self, task_id: int) -> Optional[TaskRun]:
-        """Return the most recent reopenable STOPPED run for a task, or None (#504).
-
-        A STOPPED run is resumable: :meth:`transition_to_running` reopens it and
-        ``start_task`` auto-resumes it instead of inserting a second row, so one
-        continuous effort stays one run. An *aborted* STOPPED run (``aborted_at``
-        stamped — deliberately voided from billing by abort/reap) is NOT resumable:
-        reopening it would resurrect time a human or the reaper chose to discard,
-        so a fresh ``start_task`` opens a new run instead. CLOSED runs are terminal
-        and never match. The newest qualifying run is returned when a task has
-        several stopped runs on record.
-        """
-        return self._select_run(_RESUMABLE_RUN_WHERE, (task_id,))
-
-    def get_run_by_id(self, run_id: int) -> Optional[TaskRun]:
-        return self._select_run("WHERE id = ?", (run_id,))
-
-    def get_all_active_runs(self) -> list[TaskRun]:
-        return self._select_runs(
-            "WHERE state IN ('RUNNING', 'AWAITING_ANSWERS') ORDER BY started_at"
-        )
-
-    def get_all_runs(self) -> list[TaskRun]:
-        # Terminal CLOSED runs are hidden from the default run listing (#504): the
-        # CLI ``report``/``list`` tables and the TUI run count read through here,
-        # so a closed run drops out of every default surface. Targeted lookups
-        # (:meth:`get_run_by_id`) still see it.
-        return self._select_runs("WHERE state != 'CLOSED' ORDER BY started_at")
-
-    def get_stopped_runs_with_timesheet(self) -> list[TaskRun]:
-        return self._select_runs(
-            "WHERE state = 'STOPPED' AND timesheet_id IS NOT NULL ORDER BY started_at"
-        )
-
-    def create_run(
-        self,
-        task_id: int,
-        task_name: str,
-        project_id: int,
-        project_name: str,
-        timesheet_id: Optional[int] = None,
-    ) -> TaskRun:
-        started_at = datetime.now(timezone.utc).isoformat()
-        # Check and insert share one BEGIN IMMEDIATE transaction (#628): a
-        # concurrent create for the same task waits on the write lock and then
-        # sees this row, so exactly one create wins the single-active-run
-        # invariant instead of two check-then-insert sequences both passing.
-        with self._write_txn() as conn:
-            existing = _fetch_run(conn, _ACTIVE_RUN_WHERE, (task_id,))
-            if existing is not None:
-                raise TaskAlreadyRunningError(
-                    f"Task {task_id!r} ({task_name!r}) already has an active session "
-                    f"(id={existing.id}, state={existing.state.value})."
-                )
-            cursor = conn.execute(
-                "INSERT INTO task_runs (task_id, task_name, project_id, project_name, "
-                "state, started_at, timesheet_id, notes) VALUES (?, ?, ?, ?, 'RUNNING', ?, ?, '[]')",
-                (
-                    task_id,
-                    task_name,
-                    project_id,
-                    project_name,
-                    started_at,
-                    timesheet_id,
-                ),
-            )
-            return _fetch_run(  # type: ignore[return-value]
-                conn, "WHERE id = ?", (cursor.lastrowid,)
-            )
-
-    def transition_to_awaiting(self, task_id: int) -> TaskRun:
-        with self._write_txn() as conn:
-            run = _fetch_run(conn, _ACTIVE_RUN_WHERE, (task_id,))
-            if run is None:
-                raise _no_active_session_error(task_id)
-            # The active lookup only returns RUNNING/AWAITING_ANSWERS rows —
-            # STOPPED (resumable) and CLOSED (terminal) are excluded — so every
-            # run read above may transition to AWAITING_ANSWERS, and under this
-            # transaction's write lock no other writer can move it first.
-            _cas_update(
-                conn,
-                "UPDATE task_runs SET state = 'AWAITING_ANSWERS' "
-                f"WHERE id = ? AND state IN {_ACTIVE_STATES_SQL}",
-                (run.id,),
-                _no_active_session_error(task_id),
-            )
-            return _fetch_run(  # type: ignore[return-value]
-                conn, "WHERE id = ?", (run.id,)
-            )
-
-    def transition_to_running(self, task_id: int) -> TaskRun:
-        """Ensure the task's run is RUNNING, resuming a paused one (#504, #621).
-
-        Two predecessors resume: an ``AWAITING_ANSWERS`` run (a question was
-        answered) and a ``STOPPED`` run (work continues after a stop). A stopped
-        run is reopened IN PLACE — its ``started_at`` is preserved and its
-        ``stopped_at`` cleared, so one continuous effort stays one run instead of
-        splitting into a second row. An already-``RUNNING`` run is a NO-OP
-        success (#621): the run is returned unchanged, so idempotent automation
-        (``start_task``/``resume_task`` retries, racing resumers) never errors on
-        "already running". A task with no resumable run at all raises
-        :class:`TaskNotRunningError`. A ``CLOSED`` run is terminal and an
-        aborted stopped run is voided, so neither is returned by the lookups below.
-        """
-        with self._write_txn() as conn:
-            run = _fetch_run(conn, _ACTIVE_RUN_WHERE, (task_id,))
-            if run is not None and run.state == TaskState.RUNNING:
-                # No-op path (#621): RUNNING → RUNNING is success, not an error.
-                return run
-            if run is None:
-                run = _fetch_run(conn, _RESUMABLE_RUN_WHERE, (task_id,))
-            if run is None:
-                raise TaskNotRunningError(
-                    f"No resumable session found for task {task_id}."
-                )
-            # Defense in depth: under BEGIN IMMEDIATE the state read above still
-            # holds, so this CAS cannot lose; a rowcount of 0 would mean the
-            # transaction contract itself broke.
-            _cas_update(
-                conn,
-                "UPDATE task_runs SET state = 'RUNNING', stopped_at = NULL "
-                "WHERE id = ? AND state IN ('AWAITING_ANSWERS', 'STOPPED')",
-                (run.id,),
-                InvalidStateTransitionError(
-                    f"Cannot resume task {task_id}: its state changed mid-transition."
-                ),
-            )
-            return _fetch_run(  # type: ignore[return-value]
-                conn, "WHERE id = ?", (run.id,)
-            )
-
-    def close_run(self, task_id: int) -> TaskRun:
-        """Move a task's open run to the terminal ``CLOSED`` state (#504, CLI-only).
-
-        Closes the task's live run (``RUNNING``/``AWAITING_ANSWERS``) or, when none
-        is live, its most recent resumable ``STOPPED`` run. ``CLOSED`` is terminal:
-        neither ``resume_task`` nor ``start_task``'s auto-resume reopens it, and it
-        is hidden from :meth:`get_all_runs` and every active query. A live run's
-        ``stopped_at`` is stamped now; an already-stopped run keeps its stamp.
-        Invisible to MCP by design — reachable only from the CLI ``close`` command.
-
-        :raises TaskNotRunningError: When the task has no live or resumable run.
-        """
-        with self._write_txn() as conn:
-            run = _fetch_run(conn, _ACTIVE_RUN_WHERE, (task_id,))
-            if run is None:
-                run = _fetch_run(conn, _RESUMABLE_RUN_WHERE, (task_id,))
-            if run is None:
-                raise TaskNotRunningError(
-                    f"No open session to close for task {task_id}."
-                )
-            stopped_at = (
-                run.stopped_at.isoformat()
-                if run.stopped_at is not None
-                else datetime.now(timezone.utc).isoformat()
-            )
-            _cas_update(
-                conn,
-                "UPDATE task_runs SET state = 'CLOSED', stopped_at = ? "
-                "WHERE id = ? AND state IN ('RUNNING', 'AWAITING_ANSWERS', 'STOPPED')",
-                (stopped_at, run.id),
-                TaskNotRunningError(f"No open session to close for task {task_id}."),
-            )
-            return _fetch_run(  # type: ignore[return-value]
-                conn, "WHERE id = ?", (run.id,)
-            )
-
-    def stop_run(self, task_id: int, timesheet_id: Optional[int] = None) -> TaskRun:
-        stopped_at = datetime.now(timezone.utc).isoformat()
-        with self._write_txn() as conn:
-            run = _fetch_run(conn, _ACTIVE_RUN_WHERE, (task_id,))
-            if run is None:
-                raise _no_active_session_error(task_id)
-            # COALESCE keeps the run's stored timesheet_id when no override is
-            # given, without re-reading the row outside the transaction.
-            _cas_update(
-                conn,
-                "UPDATE task_runs SET state = 'STOPPED', stopped_at = ?, "
-                "timesheet_id = COALESCE(?, timesheet_id) "
-                f"WHERE id = ? AND state IN {_ACTIVE_STATES_SQL}",
-                (stopped_at, timesheet_id, run.id),
-                _no_active_session_error(task_id),
-            )
-            return _fetch_run(  # type: ignore[return-value]
-                conn, "WHERE id = ?", (run.id,)
-            )
-
-    def abort_run(self, task_id: int) -> TaskRun:
-        """Force-close the active run to STOPPED and stamp ``aborted_at`` (#356).
-
-        The abort analog of :meth:`stop_run`: it moves the active run straight to
-        ``STOPPED`` *and* records the abort instant in the additive ``aborted_at``
-        column so the upload path can exclude the run's leftover sessions. The
-        stamp is taken as ``now`` — at or after the abort-dispatch agent event
-        that lands at abort time — so the aborted window covers that event and it
-        can never re-derive a billable session. ``stop_run`` is left
-        billing-neutral (a normal stop must still bill), which is why the abort
-        stamp lives on a distinct method rather than a flag on ``stop_run``.
-
-        :raises TaskNotRunningError: When there is no active run to abort.
-        """
-        now = datetime.now(timezone.utc).isoformat()
-        with self._write_txn() as conn:
-            run = _fetch_run(conn, _ACTIVE_RUN_WHERE, (task_id,))
-            if run is None:
-                raise _no_active_session_error(task_id)
-            _cas_update(
-                conn,
-                "UPDATE task_runs SET state = 'STOPPED', stopped_at = ?, "
-                f"aborted_at = ? WHERE id = ? AND state IN {_ACTIVE_STATES_SQL}",
-                (now, now, run.id),
-                _no_active_session_error(task_id),
-            )
-            return _fetch_run(  # type: ignore[return-value]
-                conn, "WHERE id = ?", (run.id,)
-            )
-
-    def latest_event_timestamp_for_task(self, task_id: int) -> Optional[datetime]:
-        """Return the most recent event timestamp attributed to ``task_id``, or None.
-
-        Every event carrying the task id counts, whatever attributed it — the same
-        ``task_ids`` array the derivation and ``--attach-active-run`` write to.
-        Events fan out over their task ids with ``json_each`` (a hook event can
-        carry several), so a task matches whenever it appears anywhere in the
-        array. Timestamps are stored as one uniform UTC isoformat, so a string
-        ``MAX`` is the true chronological maximum. The task id is bound as text
-        because ``task_ids`` holds string ids. Returns ``None`` when the task has
-        no events on record.
-
-        This is the "any traffic at all" clock. It is deliberately NOT the reaper's
-        staleness clock — see
-        :meth:`latest_unattached_event_timestamp_for_task` for why (#779).
-        """
-        with self._connect() as conn:
-            row = conn.execute(
-                "SELECT MAX(events.timestamp) "
-                "FROM events, json_each(events.task_ids) AS task_each "
-                "WHERE task_each.value = ?",
-                (str(task_id),),
-            ).fetchone()
-        return datetime.fromisoformat(row[0]) if row and row[0] is not None else None
-
-    def latest_unattached_event_timestamp_for_task(
-        self, task_id: int
-    ) -> Optional[datetime]:
-        """Return the task's latest ATTACHMENT-INDEPENDENT event time, or None (#779).
-
-        The staleness clock for the reaper (#366), fixed to be non-circular. The
-        clock used to be :meth:`latest_event_timestamp_for_task`, which every
-        ``--attach-active-run`` write refreshed: an event attached to a run *because
-        the run was active* was then read back as evidence the run was alive, so a
-        forgotten-but-live run in a busy container never aged out and kept tagging
-        every session. The 12h threshold was only reachable once the whole container
-        went quiet — the dead-container case, not the live one.
-
-        Attachment-derived attribution is therefore excluded here. The command layer
-        records, in each event's payload under
-        :data:`ATTACHED_TASK_IDS_PAYLOAD_KEY`, exactly the task ids that event
-        carries ONLY because their run happened to be active (attribution rule 2);
-        an id explicitly named by the caller, recovered from the session branch, or
-        carried by an ingested ``commit``/``chatter`` event is never listed, because
-        each of those names the task independently of any run being active. The
-        ``NOT EXISTS`` in :data:`_LATEST_UNATTACHED_EVENT_SQL` drops an event from
-        THIS task's clock when the task is in that list, per task id — an event may
-        be attachment-only for one task and explicit for another, and only the
-        former must be ignored.
-
-        Rows written before #779 carry no marker and so keep counting, which is the
-        safe direction on upgrade: an existing run's clock cannot jump backwards and
-        make a live run abruptly reapable. ``json_valid`` guards a payload that is
-        not JSON (the column carries no CHECK) so this hot hook path can never raise
-        on one malformed legacy row. Returns ``None`` when no such event exists.
-        """
-        with self._connect() as conn:
-            row = conn.execute(_LATEST_UNATTACHED_EVENT_SQL, (str(task_id),)).fetchone()
-        return datetime.fromisoformat(row[0]) if row and row[0] is not None else None
-
-    def get_aborted_runs(self) -> list[TaskRun]:
-        """Return every aborted run (``aborted_at`` stamped), ordered by start.
-
-        The upload path (#356) skips any derived session lying wholly within an
-        aborted run's ``[started_at, aborted_at]`` window for the matching task,
-        so an aborted run's leftover events never bill. Work done on the same task
-        after a fresh ``start_task`` falls in a *later* run window and still bills.
-        """
-        return self._select_runs("WHERE aborted_at IS NOT NULL ORDER BY started_at")
-
-    def set_run_summary(self, run_id: int, summary: str) -> None:
-        """Store the machine-derived run summary on a run row (#626).
-
-        The summary is computed by ``stop_task`` from the run's recorded events
-        and notes (:func:`odoo_client.state.summary.summarize_run_activity`) and is
-        internal/local text: it is deliberately NOT subject to the 500-character
-        chatter cap (``enforce_chatter_body_limit``), which applies only to
-        chatter bodies posted to Odoo (``task_note`` / ``task_question``).
-        """
-        with self._connect() as conn:
-            conn.execute(
-                "UPDATE task_runs SET run_summary = ? WHERE id = ?",
-                (summary, run_id),
-            )
-
-    def get_runs_for_task(self, task_id: int) -> list[TaskRun]:
-        """Return every run recorded for ``task_id`` (CLOSED included), by start.
-
-        A targeted per-task lookup for run-summary consumers (#626): the billing
-        upload needs the derived summaries of runs overlapping a session window
-        even after a run reached the terminal ``CLOSED`` state, so — unlike
-        :meth:`get_all_runs` — closed runs are included here.
-        """
-        return self._select_runs(
-            "WHERE task_id = ? ORDER BY started_at, id", (task_id,)
-        )
-
-    def update_timesheet_id(self, run_id: int, timesheet_id: int) -> None:
-        with self._connect() as conn:
-            conn.execute(
-                "UPDATE task_runs SET timesheet_id = ? WHERE id = ?",
-                (timesheet_id, run_id),
-            )
-
-    def append_note(self, task_id: int, note: str) -> None:
-        """Append ``note`` to the active run's notes JSON in ONE statement (#627).
-
-        ``json_insert`` with the ``'$[#]'`` append path grows the array in
-        place, so the session check (the WHERE clause) and the append are a
-        single UPDATE on a single connection: two concurrent appends serialize
-        inside SQLite and BOTH land (no read-modify-write lost update), and a
-        session stopped mid-call matches no row and raises instead of silently
-        resurrecting the note onto a stopped run.
-        """
-        with self._connect() as conn:
-            cursor = conn.execute(
-                "UPDATE task_runs SET notes = json_insert(notes, '$[#]', ?) "
-                f"WHERE task_id = ? AND state IN {_ACTIVE_STATES_SQL}",
-                (note, task_id),
-            )
-            if cursor.rowcount == 0:
-                raise _no_active_session_error(task_id)
-
-    def set_question_watermark(self, task_id: int, message_id: int) -> None:
-        """Stamp ``message_id`` as the active run's answer watermark (#625).
-
-        Mirrors :meth:`append_note`: the session check (the WHERE clause) and
-        the write are ONE statement, so a session stopped mid-call matches no
-        row and raises instead of stamping a watermark onto a stopped run. A
-        later question overwrites the previous watermark, so the count exposed
-        by ``task_status`` always measures replies to the newest question.
-        """
-        with self._connect() as conn:
-            cursor = conn.execute(
-                "UPDATE task_runs SET question_message_id = ? "
-                f"WHERE task_id = ? AND state IN {_ACTIVE_STATES_SQL}",
-                (message_id, task_id),
-            )
-            if cursor.rowcount == 0:
-                raise _no_active_session_error(task_id)
-
     def get_chatter_dedupe(self, task_id: int, dedupe_key: str) -> Optional[int]:
         """Return the chatter message id recorded for ``dedupe_key``, or None.
 
@@ -1513,15 +902,6 @@ class LocalStateClient:
                 (task_id, dedupe_key, message_id, created_at),
             )
             return cursor.rowcount == 1
-
-    def remap_timesheet_id(self, old_timesheet_id: int, new_timesheet_id: int) -> None:
-        with self._connect() as conn:
-            conn.execute(
-                "UPDATE task_runs SET timesheet_id = ? WHERE timesheet_id = ?",
-                (new_timesheet_id, old_timesheet_id),
-            )
-
-    # ── Unified event/session model (additive; alongside the FSM store) ──────
 
     def _insert_event_row(
         self, conn: sqlite3.Connection, event: EventRecord
@@ -1590,28 +970,6 @@ class LocalStateClient:
                 (event_id,),
             ).fetchone()
         return _parse_event(row) if row else None
-
-    def last_note_at(self, task_id: int) -> Optional[datetime]:
-        """Return the timestamp of the most recent recorded ``task_note`` for a task.
-
-        Reads the append-only ``events`` timeseries for the newest
-        ``source='agent'`` event whose subject is ``task_note`` and whose
-        ``task_ids`` include this task, fanning out the JSON array with
-        ``json_each`` so a multi-task event still matches. Returns ``None`` when
-        the task has no recorded note event yet. This is the read primitive the
-        checkpoint-cadence hint (#387) derives elapsed time from; it never writes
-        and is safe to call on every note/start.
-        """
-        with self._connect() as conn:
-            row = conn.execute(
-                "SELECT MAX(events.timestamp) FROM events, "
-                "json_each(events.task_ids) AS task_each "
-                "WHERE events.source = 'agent' AND events.subject = 'task_note' "
-                "AND task_each.value = ?",
-                (str(task_id),),
-            ).fetchone()
-        ts = row[0] if row is not None else None
-        return datetime.fromisoformat(ts) if ts else None
 
     def get_events(
         self,
@@ -1731,7 +1089,6 @@ class LocalStateClient:
         gap_secs: int,
         task_id: Optional[str] = None,
         repo: Optional[str] = None,
-        source: SessionSource | str = SessionSource.BOTH,
     ) -> list[SessionWindow]:
         """Derive whole sessions overlapping ``[start, end]`` directly from events.
 
@@ -1753,14 +1110,7 @@ class LocalStateClient:
         ``owner/repo`` when any event carried one, else :data:`AGENTLESS_REPO`
         (pass ``""`` to select purely repo-less sessions). Results are ordered
         by start time.
-
-        ``source`` (#1086) picks the record read: ``events`` is the event store
-        alone and never opens the run record, ``runs`` is the run record alone,
-        and ``both`` (the default) merges them. A client with no run record
-        configured reads no runs whatever ``source`` says. Any other value
-        raises :class:`ValueError`.
         """
-        source = _coerce_session_source(source)
         margin = _derivation_margin(gap_secs)
         params: dict[str, object] = {
             "agentless": AGENTLESS_REPO,
@@ -1770,36 +1120,20 @@ class LocalStateClient:
             "wstart": _normalize_utc_isoformat(_widen(start, -margin)),
             "wend": _normalize_utc_isoformat(_widen(end, margin)),
         }
-        runs = (
-            []
-            if source is SessionSource.EVENTS
-            else self._runs_overlapping(
-                _widen(start, -margin), _widen(end, margin), task_id
-            )
-        )
         extra = ""
         if task_id is not None:
             extra += " AND task_key = :task_id"
             params["task_id"] = task_id
-        if repo is not None and not runs:
+        if repo is not None:
             # Repo is post-aggregation display metadata (#352), so the filter
             # matches the same COALESCE(MAX(...)) display expression the SELECT
             # projects, applied in the HAVING alongside the overlap predicate.
             extra += " AND COALESCE(MAX(NULLIF(repo, '')), :agentless) = :repo"
             params["repo"] = repo
         sql = _DERIVE_SESSIONS_SQL.format(extra=extra)
-        windows: list[SessionWindow] = []
-        if source is not SessionSource.RUNS:
-            with self._connect() as conn:
-                rows = conn.execute(sql, params).fetchall()
-            windows = [_parse_derived_window(r) for r in rows]
-        if not runs:
-            return windows
-        # The run record is a second source (#1065). Repo is display metadata a
-        # run can supply, so its filter moves after the merge.
-        return merge_runs(
-            windows, runs, gap_secs=gap_secs, start=start, end=end, repo=repo
-        )
+        with self._connect() as conn:
+            rows = conn.execute(sql, params).fetchall()
+        return [_parse_derived_window(r) for r in rows]
 
     def get_events_by_ids(self, ids: list[int]) -> list[EventRecord]:
         """Return the events with the given ids, in the order requested.
@@ -1832,73 +1166,6 @@ class LocalStateClient:
                 f"SELECT COUNT(*) FROM events{where}", tuple(params)
             ).fetchone()
         return int(row[0])
-
-    def event_ids_before(self, cutoff: datetime) -> list[int]:
-        """Return the ids of every event strictly older than ``cutoff``, ascending.
-
-        The retention read primitive (#363): the ``prune`` planner needs the full
-        set of aged event ids — including untargeted diagnostic events that never
-        form a session — so it can subtract the ids it must protect and delete the
-        remainder. ``cutoff`` is normalized to the same uniform UTC isoformat the
-        stored timestamps use, so the ``timestamp < ?`` string comparison is exact.
-        """
-        with self._connect() as conn:
-            rows = conn.execute(
-                "SELECT id FROM events WHERE timestamp < ? ORDER BY id",
-                (_normalize_utc_isoformat(cutoff),),
-            ).fetchall()
-        return [int(row[0]) for row in rows]
-
-    def delete_events(self, ids: list[int]) -> int:
-        """Delete the events with the given ids and return the number removed.
-
-        The retention write primitive (#363): the sole event-DELETION path in the
-        SDK. Ids are deleted in bounded chunks so a heavy day's worth of ids never
-        exceeds SQLite's per-statement variable limit. This is a raw delete with no
-        guard of its own — the ``prune`` planner is responsible for only ever
-        handing it ids it has proven safe to remove (see
-        :func:`odoo_client.tracking.prune.plan_prune`).
-        """
-        if not ids:
-            return 0
-        deleted = 0
-        with self._connect() as conn:
-            for chunk in _chunks(ids):
-                placeholders = ",".join("?" for _ in chunk)
-                cursor = conn.execute(
-                    f"DELETE FROM events WHERE id IN ({placeholders})", tuple(chunk)
-                )
-                deleted += cursor.rowcount
-        return deleted
-
-    def vacuum(self) -> None:
-        """Reclaim free pages left by a prune via a full ``VACUUM``.
-
-        A trivial, best-effort space reclaim (#363): after a real prune deletes
-        aged rows their pages sit on the freelist until reused, so a one-shot
-        ``VACUUM`` rewrites the (small, ephemeral) local DB to hand the space back
-        to the filesystem. Run on its own connection so no open transaction can
-        make SQLite reject the statement. Reclaim is non-essential (the prune has
-        already committed), so a lock held by a concurrent writer — VACUUM needs an
-        exclusive lock — is swallowed rather than turned into a spurious failure;
-        the busy timeout gives that writer a chance to drain first.
-
-        This never creates the DB (#369): a ``VACUUM`` on a missing file would
-        materialize an empty one, so an absent DB is a best-effort no-op (and
-        ``mode=rw`` refuses to create one anyway).
-        """
-        if not self._db_path.exists():
-            return
-        conn = sqlite3.connect(
-            f"file:{self._db_path}?mode=rw", uri=True, isolation_level=None
-        )
-        conn.execute("PRAGMA busy_timeout=2000")
-        try:
-            conn.execute("VACUUM")
-        except sqlite3.OperationalError:
-            pass
-        finally:
-            conn.close()
 
     def get_session_upload(self, session_key: str) -> Optional[dict]:
         """Return the recorded upload for a derived session key, or None.

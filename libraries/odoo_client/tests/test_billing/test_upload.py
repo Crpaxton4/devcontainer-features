@@ -107,9 +107,8 @@ class TestUploadSessionsLoop(unittest.TestCase):
             }
         ]
         state = MagicMock()
-        # No runs and no events on record: the derived description (#626) has
+        # No events on record: the derived description (#626) has
         # nothing to tell, so the session-key fallback name is used.
-        state.get_runs_for_task.return_value = []
         state.get_task_events.return_value = []
         with (
             patch(_RECONCILE, return_value=77) as reconcile,
@@ -184,26 +183,6 @@ class TestDerivedDescription(unittest.TestCase):
         now = datetime.now(timezone.utc)
         return now - timedelta(hours=1), now + timedelta(hours=1)
 
-    def test_uses_stored_run_summary_of_overlapping_run(self):
-        db = make_state_db()
-        started, ended = self._window()
-        run = db.create_run(100, "Fix VAT", 5, "Accounting")
-        db.stop_run(100)
-        db.set_run_summary(run.id, "actions: task_note x3; branch 100#fix-vat")
-        description = _derived_description(db, 100, self._session(100, started, ended))
-        self.assertEqual(description, "[/] actions: task_note x3; branch 100#fix-vat")
-
-    def test_closed_run_summary_still_attaches(self):
-        # Closing hides a run from default listings, not from billing (#626).
-        db = make_state_db()
-        started, ended = self._window()
-        run = db.create_run(100, "Fix VAT", 5, "Accounting")
-        db.stop_run(100)
-        db.set_run_summary(run.id, "closed-run narrative")
-        db.close_run(100)
-        description = _derived_description(db, 100, self._session(100, started, ended))
-        self.assertEqual(description, "[/] closed-run narrative")
-
     def test_falls_back_to_event_summary_without_run_summary(self):
         # Resync'd history that never passed through the FSM still derives a
         # narrative from the session window's events.
@@ -235,22 +214,11 @@ class TestDerivedDescription(unittest.TestCase):
         # Description is display metadata: a raising state store must not
         # abort the hours write, mirroring the telemetry stance.
         state = MagicMock()
-        state.get_runs_for_task.side_effect = RuntimeError("db down")
+        state.get_task_events.side_effect = RuntimeError("db down")
         started, ended = self._window()
         description = _derived_description(
             state, 100, self._session(100, started, ended)
         )
-        self.assertEqual(description, "[/] session 100|5")
-
-    def test_non_overlapping_run_summary_is_ignored(self):
-        db = make_state_db()
-        run = db.create_run(100, "Fix VAT", 5, "Accounting")
-        db.stop_run(100)
-        db.set_run_summary(run.id, "other window's work")
-        # A session window that ended long before this run started.
-        started = datetime(2020, 1, 1, tzinfo=timezone.utc)
-        ended = datetime(2020, 1, 2, tzinfo=timezone.utc)
-        description = _derived_description(db, 100, self._session(100, started, ended))
         self.assertEqual(description, "[/] session 100|5")
 
     def _add_event(self, db, source, subject="", payload=None, pr_num=0, ext=None):
@@ -281,22 +249,6 @@ class TestDerivedDescription(unittest.TestCase):
         headline, _, debug = description.partition("; debug: ")
         self.assertEqual(headline, "[/] Reconciled the July VAT postings")
         self.assertEqual(debug, "actions: Bash x3")
-
-    def test_stored_run_summary_becomes_the_debug_tail(self):
-        # #626's run_summary is still attached in full — it is just no longer
-        # what a reviewer reads first.
-        db = make_state_db()
-        started, ended = self._window()
-        run = db.create_run(100, "Fix VAT", 5, "Accounting")
-        db.stop_run(100)
-        db.set_run_summary(run.id, "actions: Bash x231, Edit x50; branch 100-fix-vat")
-        self._add_event(db, "commit", subject="fix: VAT rounding", ext="git:abc1234def")
-        description = _derived_description(db, 100, self._session(100, started, ended))
-        self.assertEqual(
-            description,
-            "[/] commit: fix: VAT rounding"
-            "; debug: actions: Bash x231, Edit x50; branch 100-fix-vat",
-        )
 
     def test_review_session_names_the_pr_and_verdict(self):
         # Previously a review session said nothing about which PR was reviewed.
@@ -334,9 +286,7 @@ class TestDerivedDescription(unittest.TestCase):
     def test_upload_passes_derived_description_to_reconciler(self):
         db = make_state_db()
         started, ended = self._window()
-        run = db.create_run(100, "Fix VAT", 5, "Accounting")
-        db.stop_run(100)
-        db.set_run_summary(run.id, "derived narrative")
+        self._add_event(db, "chatter", subject="derived narrative")
         session = self._session(100, started, ended)
         session["duration_secs"] = 7200
         with (
@@ -344,7 +294,7 @@ class TestDerivedDescription(unittest.TestCase):
             patch(_SWEEP, return_value=0),
         ):
             upload_sessions(MagicMock(), db, [session])
-        self.assertEqual(reconcile.call_args.args[4], "[/] derived narrative")
+        self.assertTrue(reconcile.call_args.args[4].startswith("[/] derived narrative"))
 
 
 class TestPerSessionIsolation(unittest.TestCase):

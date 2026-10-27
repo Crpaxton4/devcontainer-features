@@ -93,7 +93,7 @@ def _registry(query_result=None):
 
 def _default_store():
     # The shared upload loop's orphan sweep reads the ledger; an empty one keeps
-    # an unpatched upload a no-op (the loop is tested in test_utilities/test_upload).
+    # an unpatched upload a no-op (the loop is tested in test_services/test_upload).
     store = MagicMock()
     store.list_session_uploads.return_value = []
     return store
@@ -143,10 +143,9 @@ class TestQueryAndRefresh(unittest.TestCase):
 class TestEmptyHint(unittest.TestCase):
     """The empty-window hint (issue #332) distinguishes no-data from no-derivable."""
 
-    def _deps_for_hint(self, *, events, runs, gap_mins=30):
+    def _deps_for_hint(self, *, events, gap_mins=30):
         store = MagicMock()
         store.count_events.return_value = events
-        store.get_all_runs.return_value = list(range(runs))
         registry = FakeRegistry({"query_sessions": FakeCommand(result=[])})
         deps = _deps(
             registry=registry,
@@ -165,19 +164,19 @@ class TestEmptyHint(unittest.TestCase):
         self.assertEqual(refreshed.empty_hint, "")
 
     def test_hint_reports_counts_and_gap(self):
-        deps, _ = self._deps_for_hint(events=5, runs=3, gap_mins=45)
+        deps, _ = self._deps_for_hint(events=5, gap_mins=45)
         state = AppState(
             window=DateWindow(date(2026, 6, 1), date(2026, 6, 3)), sessions=[]
         )
         refreshed = refresh(deps, state)
         self.assertEqual(
             refreshed.empty_hint,
-            "no sessions derivable — 5 events in window, 3 runs recorded, gap=45m",
+            "no sessions derivable — 5 events in window, gap=45m",
         )
 
     def test_hint_counts_events_over_query_bounds(self):
         # count_events is asked for [midnight start, midnight day-after-end).
-        deps, store = self._deps_for_hint(events=0, runs=0)
+        deps, store = self._deps_for_hint(events=0)
         state = AppState(
             window=DateWindow(date(2026, 6, 1), date(2026, 6, 3)), sessions=[]
         )
@@ -187,7 +186,7 @@ class TestEmptyHint(unittest.TestCase):
         self.assertEqual(hi, datetime(2026, 6, 4, 0, 0, 0))
 
     def test_no_data_case_shows_zero_events(self):
-        deps, _ = self._deps_for_hint(events=0, runs=0)
+        deps, _ = self._deps_for_hint(events=0)
         state = AppState(
             window=DateWindow(date(2026, 6, 1), date(2026, 6, 3)), sessions=[]
         )
@@ -195,7 +194,7 @@ class TestEmptyHint(unittest.TestCase):
         self.assertIn("0 events in window", refreshed.empty_hint)
 
     def test_data_exists_but_not_derivable_shows_nonzero_events(self):
-        deps, _ = self._deps_for_hint(events=7, runs=2)
+        deps, _ = self._deps_for_hint(events=7)
         state = AppState(
             window=DateWindow(date(2026, 6, 1), date(2026, 6, 3)), sessions=[]
         )
@@ -203,7 +202,7 @@ class TestEmptyHint(unittest.TestCase):
         self.assertIn("7 events in window", refreshed.empty_hint)
 
     def test_hint_cleared_when_sessions_appear_on_later_refresh(self):
-        deps, store = self._deps_for_hint(events=3, runs=1)
+        deps, store = self._deps_for_hint(events=3)
         state = AppState(
             window=DateWindow(date(2026, 6, 1), date(2026, 6, 3)), sessions=[]
         )

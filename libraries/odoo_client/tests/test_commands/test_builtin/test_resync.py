@@ -90,9 +90,8 @@ class TestResyncCommand(unittest.TestCase):
             },
         )
 
-    def test_start_end_thread_into_windowed_pullers_only(self) -> None:
-        # git/github/odoo receive the parsed dates; the Google pullers keep
-        # their own google_sync_window_days window and never see them (#652).
+    def test_start_end_thread_into_the_pullers(self) -> None:
+        # git/github/odoo receive the parsed dates (#652).
         cmd, client, state = self._command()
         with (
             patch(
@@ -103,16 +102,12 @@ class TestResyncCommand(unittest.TestCase):
                 f"{_MOD}.sync_github", return_value={"inserted": 0, "found": 0}
             ) as gh,
             patch(f"{_MOD}.sync_odoo_chatter", return_value={"inserted": 0}) as odoo,
-            patch(f"{_MOD}.sync_google_calendar", return_value={"inserted": 0}) as gcal,
         ):
-            cmd.execute(
-                sources="git,github,odoo,gcal", start="2026-07-01", end="2026-07-31"
-            )
+            cmd.execute(sources="git,github,odoo", start="2026-07-01", end="2026-07-31")
         expected = {"start": date(2026, 7, 1), "end": date(2026, 7, 31)}
         git.assert_called_once_with(state, cmd.config, client, **expected)
         gh.assert_called_once_with(state, cmd.config, client, **expected)
         odoo.assert_called_once_with(client, state, cmd.config, **expected)
-        gcal.assert_called_once_with(state, cmd.config)
 
     def test_invalid_iso_date_raises_value_error(self) -> None:
         cmd, _client, _state = self._command()
@@ -131,33 +126,6 @@ class TestResyncCommand(unittest.TestCase):
             result = cmd.execute(sources="git,github")
         self.assertEqual(result["git"], {"error": "no repos"})
         self.assertEqual(result["github"], {"inserted": 1, "found": 1})
-
-    def test_google_errors_degrade_to_skip(self) -> None:
-        # At the shared command surface (TUI/MCP) a Google credentials failure
-        # must become a per-source skip — matching the CLI — not an unhandled
-        # exception escaping the MCP boundary.
-        from odoo_client.adapters import GoogleAuthError
-
-        cmd, _client, _state = self._command()
-        with patch(
-            f"{_MOD}.sync_google_calendar",
-            side_effect=GoogleAuthError("no token at /x; re-run helper"),
-        ):
-            result = cmd.execute(sources="gcal")
-        self.assertEqual(result, {"gcal": {"skipped": "no token at /x; re-run helper"}})
-
-    def test_google_range_gets_ignored_note(self) -> None:
-        cmd, _client, _state = self._command()
-        with patch(f"{_MOD}.sync_google_calendar", return_value={"inserted": 3}):
-            result = cmd.execute(sources="gcal", start="2026-07-01")
-        self.assertEqual(result["gcal"]["inserted"], 3)
-        self.assertIn("start/end ignored", result["gcal"]["note"])
-
-    def test_google_without_range_has_no_note(self) -> None:
-        cmd, _client, _state = self._command()
-        with patch(f"{_MOD}.sync_google_calendar", return_value={"inserted": 3}):
-            result = cmd.execute(sources="gcal")
-        self.assertEqual(result, {"gcal": {"inserted": 3}})
 
     def test_registered_metadata(self) -> None:
         self.assertEqual(ResyncCommand._name, "resync")

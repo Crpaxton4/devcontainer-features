@@ -1,10 +1,8 @@
-"""Core-owned task-tracker vocabulary: FSM states, runs, events, and windows.
+"""Core-owned task-tracker vocabulary: events and windows.
 
 Promoted from ``odoo_client.state.models`` by #718 (ADR-005 amendment): these
-frozen-shaped dataclasses, the :class:`TaskState` FSM enum, its error
-taxonomy, and the repo display vocabulary are *domain* types — every layer
-speaks them (the TUI renders :class:`EventRecord` rows, MCP tools branch on
-:class:`TaskState`, billing bills :class:`SessionWindow` spans), so their
+frozen-shaped dataclasses, the tracker error, and the repo display vocabulary are *domain* types — every layer
+speaks them (the TUI renders :class:`EventRecord` rows, billing bills :class:`SessionWindow` spans), so their
 home is core, not the SQLite persistence package that happens to store them.
 The module stays pure stdlib so importing the vocabulary never drags in
 persistence.
@@ -16,8 +14,7 @@ patch keeps reaching these exact objects.
 """
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from enum import Enum
+from datetime import datetime
 from typing import Optional
 
 # Repo-less agent events cannot key on a real repository, so their derived
@@ -54,34 +51,6 @@ def format_repo_label(repo: Optional[str]) -> str:
     return repo if repo else AGENTLESS_REPO_LABEL
 
 
-class SessionSource(str, Enum):
-    """Which record the sessions query reads (#1086).
-
-    ``BOTH`` is the default: the legacy event store merged with the run record.
-    ``EVENTS`` and ``RUNS`` read one source alone, so the #1065 agreement check
-    (the same work sessionized over each source gives the same answer) can run.
-    """
-
-    EVENTS = "events"
-    RUNS = "runs"
-    BOTH = "both"
-
-
-class TaskState(str, Enum):
-    #: Actively being worked; the only state that accrues fresh wall clock.
-    RUNNING = "RUNNING"
-    #: Paused waiting on a stakeholder answer; resumes to RUNNING (#504).
-    AWAITING_ANSWERS = "AWAITING_ANSWERS"
-    #: Not being worked right now but **resumable** — ``resume_task`` reopens it
-    #: and ``start_task`` auto-resumes it instead of inserting a second run row,
-    #: so one continuous effort stays one run rather than splitting (#504).
-    STOPPED = "STOPPED"
-    #: Terminal: a finished run that is never reopened by resume/auto-resume and
-    #: is hidden from the default run queries. CLI-only and invisible to MCP by
-    #: design — the agent cannot reach or reason about it (#504).
-    CLOSED = "CLOSED"
-
-
 class TrackerStateMissingError(RuntimeError):
     """Raised when the central tracker database does not exist at its path.
 
@@ -92,76 +61,6 @@ class TrackerStateMissingError(RuntimeError):
     timeline. So every state-touching entry point raises this single, actionable
     error naming the expected path rather than materializing an empty DB.
     """
-
-
-class TaskAlreadyRunningError(RuntimeError):
-    """Raised when start_task is called for a task that already has an active session."""
-
-
-class TaskNotRunningError(RuntimeError):
-    """Raised when an operation requires an active session but none exists."""
-
-
-class InvalidStateTransitionError(RuntimeError):
-    """Raised when a state transition is not permitted by the FSM."""
-
-
-@dataclass
-class TaskRun:
-    id: int
-    task_id: int
-    task_name: str
-    project_id: int
-    project_name: str
-    state: TaskState
-    started_at: datetime
-    stopped_at: Optional[datetime]
-    timesheet_id: Optional[int]
-    notes: list[str]
-    aborted_at: Optional[datetime] = None
-    """When the run was force-aborted (never billed), else ``None`` (#356).
-
-    An additive, nullable stamp set by :meth:`LocalStateClient.abort_run`. The
-    upload path excludes any derived session lying wholly within the aborted
-    run's ``[started_at, aborted_at]`` window for the same task, so an aborted
-    run's leftover events never bill. A normally stopped run leaves this ``None``.
-    """
-    question_message_id: Optional[int] = None
-    """Chatter message id of the run's most recent posted question, else ``None``.
-
-    The answer-detection watermark (#625): ``task_question`` stamps the
-    ``message_post`` return id here, and ``task_status`` reports how many chatter
-    messages are newer than it (``new_messages_since_question``) so orchestration
-    can poll "answered?" deterministically. A later question on the same run
-    overwrites the watermark (self-loop on AWAITING_ANSWERS); a run that never
-    asked a question leaves it ``None``.
-    """
-
-    run_summary: Optional[str] = None
-    """Machine-derived narrative of the run's work, else ``None`` (#626).
-
-    Written by ``stop_task`` from the run's recorded events and notes
-    (:func:`odoo_client.state.summary.summarize_run_activity`), never elicited from
-    a human. Internal/local text with NO length cap — the 500-character chatter
-    limit applies only to chatter bodies posted to Odoo. The billing upload
-    attaches this narrative to the session's timesheet entry.
-    """
-
-    @property
-    def elapsed_seconds(self) -> float:
-        end = self.stopped_at or datetime.now(timezone.utc)
-        return (end - self.started_at).total_seconds()
-
-    @property
-    def elapsed_hours(self) -> float:
-        return self.elapsed_seconds / 3600
-
-    @property
-    def elapsed_human(self) -> str:
-        total = int(self.elapsed_seconds)
-        h, rem = divmod(total, 3600)
-        m, s = divmod(rem, 60)
-        return f"{h}h {m}m {s}s"
 
 
 @dataclass
@@ -199,8 +98,7 @@ class SessionWindow:
 
     Windows are not stored: they are computed at query time by the SQL-derived
     read path (:meth:`~odoo_client.state.LocalStateClient.derive_sessions_overlapping`)
-    and returned to callers. They live alongside the ``task_runs`` FSM store
-    rather than replacing it.
+    and returned to callers.
     """
 
     id: Optional[int]
@@ -218,19 +116,6 @@ class SessionWindow:
     window's ``id`` is the *minimum* of these, so it is stable under append-only
     tail writes (a closed session's earliest event never changes).
     """
-    run_session_id: str = ""
-    """Session id of the earliest run (by start, then id) inside this window.
-
-    Empty for a window made only of events. When set, the window is derived from
-    the run record (#1065) and :func:`session_key` keys on it, so the key does not
-    move when events later join or leave the window.
-    """
-    has_failed: bool = False
-    """True when any run in the window ended ``FAILED`` (a dead letter).
-
-    The time is real and recorded, but whether it bills is a human decision at
-    upload, so the mark travels to the upload path and the timesheet line.
-    """
 
     @property
     def duration_seconds(self) -> float:
@@ -241,9 +126,7 @@ class SessionWindow:
 def session_key(window: SessionWindow) -> str:
     """Return a stable identity string for a derived session window.
 
-    A run-derived window (#1065) is keyed ``"{task_id}|run:{session_id}"`` on its
-    earliest run, which is write-once and stable. Otherwise the key is
-    ``"{task_id}|{id}"`` where ``id`` is the window's minimum event
+    The key is ``"{task_id}|{id}"`` where ``id`` is the window's minimum event
     id. As of #352 sessions partition by task only (the repo is display-only
     metadata, no longer part of the identity), so a task's agent events
     (``repo=""``) and its resync'd commits (``repo="owner/repo"``) share one key
@@ -252,6 +135,4 @@ def session_key(window: SessionWindow) -> str:
     stable across re-derivations and is the idempotency key for per-session
     timesheet uploads.
     """
-    if window.run_session_id:
-        return f"{window.task_id}|run:{window.run_session_id}"
     return f"{window.task_id}|{window.id}"

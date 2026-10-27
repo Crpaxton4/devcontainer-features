@@ -8,7 +8,6 @@ sits behind a core-owned consumer-side Protocol
 * :mod:`.git` — local git checkouts (``GitGateway``).
 * :mod:`.github` — the ``gh``-authenticated GitHub account (``IssueTracker``).
 * :mod:`.odoo` — Odoo task chatter, over the existing ``RpcClient`` port.
-* :mod:`.google` — Google Calendar + sent Gmail (``CalendarGateway``).
 * :mod:`.state` — the local SQLite events store (``StateStore``); the
   persistence bridge to the pure sessionization vocabulary lives here.
 
@@ -21,7 +20,6 @@ its layout note for why the frozen test seams pin the code there).
 
 from .git import sync_git_log
 from .github import sync_github
-from .google import GoogleAPIError, GoogleAuthError, sync_gmail, sync_google_calendar
 from .odoo import sync_odoo_chatter
 from .state import (
     UnknownEventSourceError,
@@ -42,8 +40,4 @@ __all__ = [
     "sync_git_log",
     "sync_github",
     "sync_odoo_chatter",
-    "sync_google_calendar",
-    "sync_gmail",
-    "GoogleAuthError",
-    "GoogleAPIError",
 ]

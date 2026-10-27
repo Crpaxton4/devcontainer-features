@@ -4,10 +4,9 @@ Pure helpers — no I/O, no state — that turn a run's (or derived session's)
 recorded :class:`~odoo_client.state.models.EventRecord` rows and its locally-stored
 notes into a single-line, reconstructable narrative of what happened: the tools
 that ran, the commits (short sha + subject line), the branch/PR provenance, the
-recorded test result, and the checkpoint notes. ``stop_task`` stores the result
-on the run row (``task_runs.run_summary``) and the billing upload attaches it to
-the session's timesheet entry, so detail capture is fully automatic — never a
-human gate or elicitation (#623).
+recorded test result, and the checkpoint notes. The billing upload attaches the
+result to the session's timesheet entry, so detail capture is fully automatic —
+never a human gate or elicitation (#623).
 
 :func:`summarize_session_context` (#710) is the narrative counterpart: the same
 events read for what was DONE rather than for how many tools ran. The billing
@@ -281,10 +280,8 @@ def summarize_session_context(events: list[EventRecord]) -> str:
 def summarize_run_activity(events: list[EventRecord], notes: list[str]) -> str:
     """Derive a one-line narrative of a run/session from its events and notes.
 
-    The single derivation both consumers share (#626): ``stop_task`` feeds it
-    the run window's events plus the run's notes and stores the result on the
-    run row, and the billing upload feeds it a derived session's events to name
-    the timesheet entry. Returns ``""`` when there is nothing to tell (no
+    The billing upload feeds it a derived session's events to name the
+    timesheet entry (#626). Returns ``""`` when there is nothing to tell (no
     events, no notes) so callers can apply their own fallback. No length cap —
     see the module docstring for the policy.
     """

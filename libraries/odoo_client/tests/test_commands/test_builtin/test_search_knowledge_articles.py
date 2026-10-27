@@ -22,7 +22,7 @@ from odoo_client.commands.builtin.search_knowledge_articles import (
 )
 from odoo_client.transport.errors import OdooAccessError, OdooServerError
 from odoo_client.transport.executor import OdooExecutor
-from odoo_client.utilities.knowledge import (
+from odoo_client.services.knowledge import (
     KNOWLEDGE_UNAVAILABLE_MESSAGE,
     SNIPPET_CHAR_CAP,
     _article_snippet,
@@ -200,7 +200,7 @@ class TestArticleSnippet(unittest.TestCase):
     """The snippet helper caps long previews at :data:`SNIPPET_CHAR_CAP`."""
 
     def test_short_body_returned_verbatim(self):
-        from odoo_client.utilities.html import html_to_markdown
+        from odoo_client._text import html_to_markdown
 
         body = "<p>Hello <b>world</b></p>"
         self.assertEqual(_article_snippet(body), html_to_markdown(body))

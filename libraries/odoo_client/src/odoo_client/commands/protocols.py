@@ -12,7 +12,6 @@ Port                      Concrete adapter                       Adapter package
 :class:`StateStore`       ``LocalStateClient``                   ``state/`` (+ ``adapters/state``)
 :class:`GitGateway`       ``sync_git_log`` module surface        ``adapters/git``
 :class:`IssueTracker`     ``sync_github`` module surface         ``adapters/github``
-:class:`CalendarGateway`  Google puller module surface           ``adapters/google``
 :class:`SettingsView`     ``LocalConfig``                        ``state/config``
 ========================  =====================================  =========================
 
@@ -28,13 +27,11 @@ inject overrides through that command's ``pullers`` seam, while
 """
 
 from datetime import date, datetime
-from typing import TYPE_CHECKING, Any, Callable, Optional, Protocol
+from typing import TYPE_CHECKING, Any, Optional, Protocol
 
 from odoo_client.tracking.models import (
     EventRecord,
-    SessionSource,
     SessionWindow,
-    TaskRun,
 )
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -78,7 +75,7 @@ class StateStore(Protocol):
     (SQLite, host-provisioned): every member below is called today by the
     command layer, the billing/tracking workflows, or the TUI driver's
     read paths. The store's ingest-only members (``add_event_dedup``,
-    ``get_event``, ``get_events``, ``update_timesheet_id``) are deliberately
+    ``get_event``, ``get_events``) are deliberately
     absent — only the data-side resync adapters use them, and an adapter
     talking to its own store needs no port.
 
@@ -86,71 +83,15 @@ class StateStore(Protocol):
     change.
     """
 
-    # ── run FSM ─────────────────────────────────────────────────────────
-    def require_active_run(self, task_id: int) -> TaskRun: ...
-
-    def get_active_run(self, task_id: int) -> Optional[TaskRun]: ...
-
-    def get_resumable_run(self, task_id: int) -> Optional[TaskRun]: ...
-
-    def get_run_by_id(self, run_id: int) -> Optional[TaskRun]: ...
-
-    def get_all_active_runs(self) -> list[TaskRun]: ...
-
-    def get_all_runs(self) -> list[TaskRun]: ...
-
-    def get_stopped_runs_with_timesheet(self) -> list[TaskRun]: ...
-
-    def create_run(
-        self,
-        task_id: int,
-        task_name: str,
-        project_id: int,
-        project_name: str,
-        timesheet_id: Optional[int] = None,
-    ) -> TaskRun: ...
-
-    def transition_to_awaiting(self, task_id: int) -> TaskRun: ...
-
-    def transition_to_running(self, task_id: int) -> TaskRun: ...
-
-    def close_run(self, task_id: int) -> TaskRun: ...
-
-    def stop_run(self, task_id: int, timesheet_id: Optional[int] = None) -> TaskRun: ...
-
-    def abort_run(self, task_id: int) -> TaskRun: ...
-
-    def get_aborted_runs(self) -> list[TaskRun]: ...
-
-    def get_runs_for_task(self, task_id: int) -> list[TaskRun]: ...
-
-    def set_run_summary(self, run_id: int, summary: str) -> None: ...
-
-    # ── run annotations and chatter bookkeeping ─────────────────────────
-    def append_note(self, task_id: int, note: str) -> None: ...
-
-    def last_note_at(self, task_id: int) -> Optional[datetime]: ...
-
-    def set_question_watermark(self, task_id: int, message_id: int) -> None: ...
-
+    # ── chatter bookkeeping ─────────────────────────────────────────────
     def get_chatter_dedupe(self, task_id: int, dedupe_key: str) -> Optional[int]: ...
 
     def record_chatter_dedupe(
         self, task_id: int, dedupe_key: str, message_id: int
     ) -> bool: ...
 
-    def remap_timesheet_id(
-        self, old_timesheet_id: int, new_timesheet_id: int
-    ) -> None: ...
-
     # ── events timeseries ───────────────────────────────────────────────
     def add_event(self, event: EventRecord) -> EventRecord: ...
-
-    def latest_event_timestamp_for_task(self, task_id: int) -> Optional[datetime]: ...
-
-    def latest_unattached_event_timestamp_for_task(
-        self, task_id: int
-    ) -> Optional[datetime]: ...
 
     def get_task_events(
         self,
@@ -171,12 +112,6 @@ class StateStore(Protocol):
 
     def assign_event_task_ids(self, event_ids: list[int], task_id: int) -> int: ...
 
-    def event_ids_before(self, cutoff: datetime) -> list[int]: ...
-
-    def delete_events(self, ids: list[int]) -> int: ...
-
-    def vacuum(self) -> None: ...
-
     # ── derived sessions and the upload ledger ──────────────────────────
     def derive_sessions_overlapping(
         self,
@@ -186,7 +121,6 @@ class StateStore(Protocol):
         gap_secs: int,
         task_id: Optional[str] = None,
         repo: Optional[str] = None,
-        source: SessionSource | str = SessionSource.BOTH,
     ) -> list[SessionWindow]: ...
 
     def get_session_upload(self, session_key: str) -> Optional[dict]: ...
@@ -256,38 +190,6 @@ class IssueTracker(Protocol):
         now: Optional[datetime] = None,
         start: Optional[date] = None,
         end: Optional[date] = None,
-    ) -> dict[str, Any]: ...
-
-
-class CalendarGateway(Protocol):
-    """Port for the opt-in Google participation sources (#718).
-
-    Derived from core's call sites
-    (:func:`odoo_client.commands.builtin.resync._run_google`): the two Google
-    pullers are invoked identically — ``puller(state, config)`` — and both
-    raise (``GoogleAuthError`` / ``GoogleAPIError`` / ``ValueError``) rather
-    than skip, so core guards them behind one error boundary. One port
-    covers the one external system (Google): Calendar meeting-tick series
-    and sent-Gmail point events. The adapter package
-    :mod:`odoo_client.adapters.google` satisfies it as a module (PEP 544).
-    """
-
-    def sync_google_calendar(
-        self,
-        state: StateStore,
-        config: "LocalConfig",
-        *,
-        transport: Callable[..., dict] = ...,
-        now: Optional[datetime] = None,
-    ) -> dict[str, Any]: ...
-
-    def sync_gmail(
-        self,
-        state: StateStore,
-        config: "LocalConfig",
-        *,
-        transport: Callable[..., dict] = ...,
-        now: Optional[datetime] = None,
     ) -> dict[str, Any]: ...
 
 

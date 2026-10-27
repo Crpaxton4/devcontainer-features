@@ -35,8 +35,7 @@ from typing import Optional
 from unittest.mock import patch
 
 import odoo_client.cli.__main__ as cli
-from odoo_client.adapters.state_persistence import _CLAUDE_SOURCE_PREFIX
-from odoo_client.state import ATTACHED_TASK_IDS_PAYLOAD_KEY
+from odoo_client.adapters.state.persistence import _CLAUDE_SOURCE_PREFIX
 from odoo_client.state import LocalStateClient as TaskStateDB
 from odoo_client.state.db import _DEVELOPMENT_SOURCE_PREDICATE, tracker_db_path
 from odoo_client.state.summary import _CWD_KEY, _PROMPT_KEY, summarize_session_context
@@ -189,8 +188,7 @@ class TestShimArgvLandsBillingEligibleRow(unittest.TestCase):
 
         The shim always forwards the session's branch (#574); ``branch=None``
         models the one case where it has none to forward (a detached HEAD or a
-        non-repo cwd), which since #1040 is also the case where an open run is
-        attachment-only and therefore not billed."""
+        non-repo cwd), where the event attributes to no task."""
         argv = [
             "odoo-sdk",
             "log-event",
@@ -222,10 +220,6 @@ class TestShimArgvLandsBillingEligibleRow(unittest.TestCase):
         return count
 
     def test_full_hook_vector_lands_a_billing_eligible_row(self) -> None:
-        db = TaskStateDB()
-        db.create_run(28788, "Task A", 1, "Proj")
-        db.create_run(202, "Task B", 1, "Proj")
-
         self._run_shim_argv(
             "Bash", '{"session_id": "s-1", "tool_name": "Bash"}', "28788-hook-fix"
         )
@@ -236,42 +230,25 @@ class TestShimArgvLandsBillingEligibleRow(unittest.TestCase):
         self.assertEqual(event.source, "claude:PreToolUse")
         self.assertEqual(event.subject, "Bash")
         # The session is on task 28788's own branch, so --attach-active-run
-        # attributes it to that run and that run ALONE: the other open run is
-        # the #1040 fan-out, recorded as provenance but never billed.
+        # attributes it to that task.
         self.assertEqual(event.task_ids, ["28788"])
-        # --payload must have persisted verbatim, alongside the attachment-only
-        # provenance the command records for the ids rule 2 alone attributed
-        # (#779) — the marker is additive and never rewrites a caller's keys.
-        self.assertEqual(
-            event.payload,
-            {
-                "session_id": "s-1",
-                "tool_name": "Bash",
-                ATTACHED_TASK_IDS_PAYLOAD_KEY: ["202"],
-            },
-        )
+        # --payload must have persisted verbatim.
+        self.assertEqual(event.payload, {"session_id": "s-1", "tool_name": "Bash"})
 
         # The persisted row must satisfy the billing predicate — this is what
         # makes a hook event sessionize/bill. A prefix drift would persist a row
         # that never bills; assert the real predicate matches it.
         self.assertEqual(self._predicate_matches(), 1)
 
-    def test_hook_vector_without_a_task_branch_bills_no_run(self) -> None:
-        # The #1040 fan-out vector: two runs left open, a session with no task
-        # branch to corroborate either. The row still lands and still matches the
-        # billing predicate (so it keeps the reaper's clock and the session
-        # narrative), but it attributes to NO task instead of to both.
-        db = TaskStateDB()
-        db.create_run(101, "Task A", 1, "Proj")
-        db.create_run(202, "Task B", 1, "Proj")
-
+    def test_hook_vector_without_a_task_branch_attributes_no_task(self) -> None:
+        # No task branch to name a task: the row still lands and still matches
+        # the billing predicate (so it keeps the session narrative), but it
+        # attributes to NO task.
         self._run_shim_argv("Bash", '{"session_id": "s-1", "tool_name": "Bash"}')
 
         event = TaskStateDB().get_events()[0]
         self.assertEqual(event.task_ids, [])
-        self.assertEqual(
-            sorted(event.payload[ATTACHED_TASK_IDS_PAYLOAD_KEY]), ["101", "202"]
-        )
+        self.assertEqual(event.payload, {"session_id": "s-1", "tool_name": "Bash"})
         self.assertEqual(self._predicate_matches(), 1)
 
     def test_captured_prompt_names_the_session_end_to_end(self) -> None:
@@ -279,8 +256,6 @@ class TestShimArgvLandsBillingEligibleRow(unittest.TestCase):
         # CLI into the real events table, and the billing summariser reads it
         # back as the session's narrative. Before this a hook-only session had
         # nothing but its tool tally to be named by.
-        db = TaskStateDB()
-        db.create_run(101, "Task A", 1, "Proj")
         self._run_shim_argv(
             "",
             '{"session_id": "s-1", "hook_event_name": "UserPromptSubmit", '
@@ -293,8 +268,8 @@ class TestShimArgvLandsBillingEligibleRow(unittest.TestCase):
             "prompt: Add a VAT column to the invoice report",
         )
 
-    def test_stated_branch_recovers_task_without_an_active_run(self) -> None:
-        # #574 end to end: with no active run, the shim's --branch lets the CLI
+    def test_stated_branch_recovers_task(self) -> None:
+        # #574 end to end: the shim's --branch lets the CLI
         # recover the task id from the <task-id>-<slug> convention, so the row
         # bills against the task instead of landing untargeted in triage. The cwd
         # is non-git (repo/branch resolve empty), proving attribution rides on the

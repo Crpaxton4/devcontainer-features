@@ -18,8 +18,8 @@ from odoo_client.commands.builtin import BUILTIN_COMMANDS
 from odoo_client.commands.builtin.read_attachment import ReadAttachmentCommand
 from odoo_client.transport.errors import OdooMissingRecordError
 from odoo_client.transport.executor import OdooExecutor
-from odoo_client.utilities import attachments
-from odoo_client.utilities.attachments import (
+from odoo_client.services import attachments
+from odoo_client.services.attachments import (
     MAX_ATTACHMENT_BYTES,
     _file_extension,
     read_attachment,

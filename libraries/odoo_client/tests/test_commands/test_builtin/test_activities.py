@@ -40,7 +40,7 @@ from odoo_client.commands.builtin.search_activity_types import (
 )
 from odoo_client.state import LocalConfig
 from odoo_client.transport.executor import OdooExecutor
-from odoo_client.utilities.activities import (
+from odoo_client.services.activities import (
     DEFAULT_ACTIVITY_RES_MODEL,
     get_activities,
     mark_activity_done,
@@ -740,8 +740,7 @@ class TestActivityToolExposure(unittest.TestCase):
     Registering a command is NOT enough: the MCP layer owns ``_explicit_tools``,
     so a tool with no factory in ``ATOMIC_TOOL_FACTORIES`` is built by nothing
     and exposed by nothing. These assertions walk the whole path — factory to
-    ``build_explicit_tools`` to the default (ungated) surface to the tools the
-    server actually adds.
+    ``build_explicit_tools`` to the tools the server actually adds.
     """
 
     _TOOL_NAMES = (
@@ -771,15 +770,6 @@ class TestActivityToolExposure(unittest.TestCase):
             self.assertIn(name, tools)
             _, description = tools[name]
             self.assertNotEqual(description, "")
-
-    def test_tools_stay_on_the_default_ungated_surface(self):
-        from odoo_client.mcp.tools import build_explicit_tools, default_tool_surface
-
-        default = default_tool_surface(
-            build_explicit_tools(self._registry()), include_gated=False
-        )
-        for name in self._TOOL_NAMES:
-            self.assertIn(name, default)
 
     def test_server_registers_the_tools(self):
         from odoo_client.mcp.server import OdooMCPServer

@@ -32,7 +32,7 @@ from odoo_client.transport.errors import (
     OdooValidationError,
 )
 
-from odoo_client.utilities.html import html_to_markdown
+from odoo_client._text import html_to_markdown
 
 #: Exact, stable error message raised when ``knowledge.article`` is absent
 #: (Odoo Community, or the Knowledge app not installed). Pinned so callers and

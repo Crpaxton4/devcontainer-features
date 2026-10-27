@@ -18,27 +18,12 @@ from unittest.mock import MagicMock, Mock, patch
 from odoo_client.commands.command_registry import Registry
 from odoo_client.mcp import server
 from odoo_client.mcp.server import OdooMCPServer, _error_boundary, _error_payload
-from odoo_client.state.models import (
-    TaskAlreadyRunningError,
-    TaskNotRunningError,
-    TrackerStateMissingError,
-)
+from odoo_client.state.models import TrackerStateMissingError
 from odoo_client.transport.errors import OdooError, OdooValidationError
 
-# Each caught type paired with the exact payload the boundary must produce. The
-# amendment to #222 uses TaskAlreadyRunningError in place of ActiveSessionError.
+# Each caught type paired with the exact payload the boundary must produce.
 _CAUGHT_CASES = [
     (OdooError("odoo boom"), "OdooError", "odoo boom"),
-    (
-        TaskNotRunningError("no active session"),
-        "TaskNotRunningError",
-        "no active session",
-    ),
-    (
-        TaskAlreadyRunningError("session already active"),
-        "TaskAlreadyRunningError",
-        "session already active",
-    ),
     (
         TrackerStateMissingError("no tracker database at /x/tracker.db"),
         "TrackerStateMissingError",
@@ -143,31 +128,29 @@ class TestErrorBoundaryWiredIntoServer(unittest.TestCase):
     """A failing fake tool wired through a real OdooMCPServer (smoke replacement)."""
 
     def test_sync_failing_tool_returns_structured_payload(self):
-        tool = _build_added(
-            "boom", _sync_raiser(TaskNotRunningError("no active session"))
-        )
+        tool = _build_added("boom", _sync_raiser(ValueError("no such task")))
         with patch.dict("os.environ", {}, clear=True):
             self.assertEqual(
                 tool.fn(),
                 {
                     "error": {
-                        "type": "TaskNotRunningError",
-                        "message": "no active session",
+                        "type": "ValueError",
+                        "message": "no such task",
                     }
                 },
             )
 
     def test_async_failing_tool_returns_structured_payload(self):
         tool = _build_added(
-            "boom", _async_raiser(TaskAlreadyRunningError("already active"))
+            "boom", _async_raiser(TrackerStateMissingError("no tracker database"))
         )
         with patch.dict("os.environ", {}, clear=True):
             self.assertEqual(
                 asyncio.run(tool.fn()),
                 {
                     "error": {
-                        "type": "TaskAlreadyRunningError",
-                        "message": "already active",
+                        "type": "TrackerStateMissingError",
+                        "message": "no tracker database",
                     }
                 },
             )

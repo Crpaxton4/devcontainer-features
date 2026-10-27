@@ -13,11 +13,7 @@ reconciled through :func:`odoo_client.billing.timesheet.reconcile_session`, the
 sole ``account.analytic.line`` hours-writer for the derived-upload path, so a
 re-run never double-bills (each session's stable ``session_key`` maps to one
 row). Sessions lacking a numeric task id carry no Odoo task to bill and are
-skipped. Sessions lying wholly within an aborted run's window
-(``task_runs.aborted_at``, #356) are excluded outright — an abort promised not
-to log that run's work, so its leftover events must never bill — and, because
-they are excluded from the derived set, any hours a pre-abort upload already
-wrote for them are zeroed by the sweep. After billing, the stale-mapping sweep
+skipped. After billing, the stale-mapping sweep
 (:func:`odoo_client.billing.timesheet.sweep_orphaned_uploads`, #353) diffs the
 upload ledger against the just-derived key set for the window and zeroes /
 retires any mapping that no longer derives, so merged-away sessions are not
@@ -39,63 +35,6 @@ from odoo_client.state.summary import summarize_run_activity, summarize_session_
 from odoo_client.transport.errors import OdooError
 
 from .timesheet import reconcile_session, sweep_orphaned_uploads
-
-# How far past ``aborted_at`` the aborted-run exclusion window extends (#356).
-# The abort's own dispatch telemetry — the MCP wrapper's agent event and the
-# claude-event-hook PostToolUse shim — lands moments AFTER ``aborted_at`` is
-# stamped (both emit only once the tool has returned), so a bare upper bound
-# would let that trailing event push the derived session past the window and
-# re-bill the aborted run. One minute comfortably covers dispatch latency;
-# genuine post-restart work keeps producing events past the grace, so its
-# session extends beyond the window and still bills.
-_ABORT_DISPATCH_GRACE = timedelta(seconds=60)
-
-
-def _aborted_windows(
-    state: LocalStateClient,
-) -> list[tuple[str, datetime, datetime]]:
-    """Return ``(task_id, started_at, aborted_at)`` for every aborted run (#356).
-
-    An aborted run (``abort_task`` / cross-DB ``abort_run``) promised not to log
-    its work, so the sessions its leftover events derive must not bill. Each
-    aborted run contributes the window its sessions are excluded within. Runs
-    with no ``aborted_at`` are normal stops and never appear here
-    (``get_aborted_runs`` selects only stamped rows).
-    """
-    return [
-        (str(run.task_id), run.started_at, run.aborted_at)
-        for run in state.get_aborted_runs()
-    ]
-
-
-def _within_aborted_window(
-    session: dict[str, Any], windows: list[tuple[str, datetime, datetime]]
-) -> bool:
-    """True when ``session`` lies wholly within an aborted run's window (#356).
-
-    A session is excluded only when it matches an aborted run's task AND it
-    *began during the run* (``started_at <= started <= aborted_at``, so the
-    session is the aborted run's own leftover, not a later one) AND it ended by
-    ``aborted_at`` widened with :data:`_ABORT_DISPATCH_GRACE` — the abort's own
-    dispatch event is emitted just after ``aborted_at`` is stamped and must
-    still be covered. All bounds are inclusive. Sessions that fall outside
-    still bill: one starting *after* the abort is a fresh run's work (however
-    short), and one whose gap-chain *straddles* past the grace into
-    post-restart work is returned whole rather than suppressed. Session bounds
-    are normalized to aware UTC (legacy events stored before the +00:00
-    normalization parse naive) so the comparison never mixes naive and aware.
-    """
-    task_id = str(session.get("task_id"))
-    started = as_utc(datetime.fromisoformat(session["started_at"]))
-    ended = as_utc(datetime.fromisoformat(session["ended_at"]))
-    for wtask, wstart, wend in windows:
-        if (
-            task_id == wtask
-            and wstart <= started <= wend
-            and ended <= wend + _ABORT_DISPATCH_GRACE
-        ):
-            return True
-    return False
 
 
 def _round_to_step(value: float, step: float) -> float:
@@ -169,28 +108,6 @@ def range_bounds(
     return lo, datetime.combine(end + timedelta(days=1), time.min)
 
 
-def _overlapping_run_summaries(
-    state: LocalStateClient, task_id: int, started: datetime, ended: datetime
-) -> list[str]:
-    """Return the stored run summaries of the task's runs overlapping a window.
-
-    The stop-time derivation (#626) already wrote each run's machine-derived
-    narrative onto its row; a session's description is the summaries of every
-    run of the same task whose ``[started_at, stopped_at]`` span overlaps the
-    session window (a still-open run overlaps through "now"). CLOSED runs are
-    included — closing hides a run from default listings, not from billing.
-    """
-    summaries = []
-    for run in state.get_runs_for_task(task_id):
-        if not run.run_summary:
-            continue
-        run_started = as_utc(run.started_at)
-        run_ended = as_utc(run.stopped_at) if run.stopped_at else None
-        if run_started <= ended and (run_ended is None or run_ended >= started):
-            summaries.append(run.run_summary)
-    return summaries
-
-
 # Separator between a timesheet name's narrative headline and the machine tally
 # demoted behind it (#710). The tally is kept — it is the only reconstructable
 # record of what ran — but it is explicitly labelled as the debug tail so a
@@ -221,10 +138,8 @@ def _derived_description(
       window's events: the chatter notes the user wrote on the task, else the
       commits / PR titles / review states recorded in the window, else the hook
       context (first user prompt, else ``cwd``). This is what a reviewer reads.
-    * The **debug tail** — the stored run summaries of the task's runs
-      overlapping the window (the #626 stop-time derivation), else a fresh
-      :func:`summarize_run_activity` over the same events (covers resync'd
-      history that never passed through the FSM). Tool tallies live HERE (#710).
+    * The **debug tail** — :func:`summarize_run_activity` over the same events.
+      Tool tallies live HERE (#710).
 
     With neither half the bare ``[/] session {key}`` fallback stands. Derived
     text is internal/local and carries NO length cap — the 500-character limit
@@ -238,9 +153,8 @@ def _derived_description(
     try:
         started = as_utc(datetime.fromisoformat(session["started_at"]))
         ended = as_utc(datetime.fromisoformat(session["ended_at"]))
-        summaries = _overlapping_run_summaries(state, task_id, started, ended)
         events = state.get_task_events(str(task_id), started, ended)
-        detail = "; ".join(summaries) or summarize_run_activity(events, [])
+        detail = summarize_run_activity(events, [])
         text = _compose_description(summarize_session_context(events), detail)
     except Exception:
         return fallback
@@ -277,13 +191,8 @@ def _upload_one(
     hours = _billable_hours(raw_hours, minimum, step)
     key = session.get("session_key", "")
     timesheet_id: Optional[int] = None
-    failed = bool(session.get("has_failed_run", False))
     if not dry_run:
         description = _derived_description(state, task_id, session)
-        if failed:
-            # A dead-lettered run is real time, but whether it bills is a human
-            # call: the line says so, and the dry run shows the same flag.
-            description = f"[failed run] {description}"
         timesheet_id = reconcile_session(
             client,
             state,
@@ -299,7 +208,6 @@ def _upload_one(
         "session_key": key,
         "hours": hours,
         "timesheet_id": timesheet_id,
-        **({"has_failed_run": True} if failed else {}),
     }
 
 
@@ -356,8 +264,7 @@ def upload_sessions(
         points (the TUI ``u`` key and ``odoo-sdk upload``) pick up the file and
         environment overrides automatically.
     :return: A summary dict with ``uploaded`` (billable session count),
-        ``skipped`` (non-numeric-task sessions), ``excluded`` (sessions inside an
-        aborted run's window, never billed — #356), ``failed`` (per-session
+        ``skipped`` (non-numeric-task sessions), ``failed`` (per-session
         ``{session_key, task_id, error}`` rows for sessions whose Odoo write
         faulted — #582/#576, the batch continued past them), ``retired`` (orphan
         mappings swept), ``dry_run``, and ``rows`` (one ``{task_id, session_key,
@@ -369,21 +276,15 @@ def upload_sessions(
     step = config.round_session_hours
     rows: list[dict[str, Any]] = []
     failed: list[dict[str, Any]] = []
-    skipped = excluded = 0
-    aborted_windows = _aborted_windows(state)
-    selected: list[dict[str, Any]] = []
+    skipped = 0
     for session in sessions:
-        if _within_aborted_window(session, aborted_windows):
-            excluded += 1  # aborted runs never bill (#356)
-            continue
-        selected.append(session)
         task_id = _numeric_task_id(session.get("task_id"))
         if task_id is None:
             skipped += 1
             continue
         # Per-session isolation (#582): one session's server fault (e.g. the #576
         # missing-analytic-account UserError) must not abort the batch or skip
-        # the orphan sweep. Its key stays in ``selected`` so the sweep never
+        # the orphan sweep. Its key stays in ``sessions`` so the sweep never
         # zeroes a partially-billed row for it.
         try:
             rows.append(
@@ -394,16 +295,13 @@ def upload_sessions(
     retired = 0
     if not dry_run:
         window_lo, window_hi = range_bounds(start_date, end_date)
-        # Window-scoped orphan sweep (#353): ``derived_keys`` comes from
-        # ``selected`` (aborted-window sessions dropped, so their pre-abort
-        # uploads are retired) while ``derived_task_ids`` comes from ALL derived
-        # ``sessions`` — the legacy NULL-bounds ledger branch keys on the task
-        # ids active in this window, and an aborted run's task must stay in that
-        # set so its legacy pre-#353 billing is zeroed too.
+        # Window-scoped orphan sweep (#353): ``derived_keys`` and
+        # ``derived_task_ids`` come from the derived ``sessions`` — the legacy
+        # NULL-bounds ledger branch keys on the task ids active in this window.
         retired = sweep_orphaned_uploads(
             client,
             state,
-            derived_keys={s.get("session_key", "") for s in selected},
+            derived_keys={s.get("session_key", "") for s in sessions},
             derived_task_ids={str(s.get("task_id")) for s in sessions},
             window_lo=window_lo,
             window_hi=window_hi,
@@ -411,7 +309,6 @@ def upload_sessions(
     return {
         "uploaded": len(rows),
         "skipped": skipped,
-        "excluded": excluded,
         "failed": failed,
         "retired": retired,
         "dry_run": dry_run,

@@ -12,9 +12,9 @@ Consumers who want to expose custom commands should build their own
 :class:`OdooMCPServer` from their own script instead of using this entry point.
 """
 
-from odoo_client.bootstrap import LocalConfig, OdooClient, bootstrap
+from odoo_client.bootstrap import LocalConfig, OdooClient, assert_configured, bootstrap
 from odoo_client.mcp.server import OdooMCPServer
-from odoo_client.mcp.tools import build_explicit_tools, default_tool_surface
+from odoo_client.mcp.tools import build_explicit_tools
 
 
 def main() -> None:
@@ -24,26 +24,18 @@ def main() -> None:
     setting and the ``ODOO_PROFILING`` environment variable (File > Env >
     Default) via :class:`LocalConfig`, then passed to the server.
 
-    The server exposes the default tool surface — the everyday working set —
-    with the narrow-context tools held back so the count stays under Claude
-    Code's client-side lazy-deferral threshold (#512). Setting
-    ``ODOO_MCP_INCLUDE_GATED`` restores the full surface for a session that
-    needs the maintenance/triage tooling. The gate itself is native fastmcp
-    visibility since #715 — :class:`OdooMCPServer` tags gated tools and
-    disables the tag unless the opt-in is set — while this entry point still
-    applies the (deprecated) :func:`default_tool_surface` pre-filter, whose
-    hand-off is pinned by the frozen surface contract tests; both layers
-    resolve the same env flag, so the client-observable surface is identical.
+    The server exposes every explicit tool.
 
     :return: None.
     :rtype: None
     """
 
+    assert_configured()
     config = LocalConfig.load()
     registry = bootstrap(client=OdooClient(), config=config)
     OdooMCPServer(
         registry,
-        explicit_tools=default_tool_surface(build_explicit_tools(registry)),
+        explicit_tools=build_explicit_tools(registry),
         profiling=config.profiling,
     ).run()
 

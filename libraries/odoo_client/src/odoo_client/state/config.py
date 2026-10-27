@@ -585,16 +585,13 @@ _DEFAULT_SESSION_GAP_MINS = 60
 _DEFAULT_MIN_SESSION_HOURS = 0.25
 _DEFAULT_ROUND_SESSION_HOURS = 0.05
 
-# Google Calendar / Gmail ingestion defaults (issue #370). ``calendar_tick_mins``
-# is the constant interval at which a meeting is expanded into synthetic point
-# events so the existing gap derivation reconstructs it as one session; it MUST
-# stay strictly below the session gap and the sweep floor (validated at resync,
-# acceptance #11). ``ingest_subjects`` controls whether an ingested meeting/email
-# subject is stored. ``google_sync_window_days`` is the backward/forward reconcile
-# window (calendar mutates retroactively, so the window looks both ways).
+# Meeting-tick ingestion defaults (issue #370). ``calendar_tick_mins`` is the
+# constant interval at which a meeting is expanded into synthetic point events so
+# the existing gap derivation reconstructs it as one session; it MUST stay
+# strictly below the session gap and the sweep floor. ``ingest_subjects``
+# controls whether an ingested subject is stored.
 _DEFAULT_CALENDAR_TICK_MINS = 5
 _DEFAULT_INGEST_SUBJECTS = True
-_DEFAULT_GOOGLE_SYNC_WINDOW_DAYS = 30
 
 # Resync-capture defaults (issue #378). ``day_bucket_tz`` is the IANA timezone the
 # scoring/rendering day-bucketing uses; it was a hardcoded EDT offset that
@@ -614,8 +611,6 @@ _BEHAVIOR_ENV_VARS: dict[str, str] = {
     "round_session_hours": "ODOO_ROUND_SESSION_HOURS",
     "calendar_tick_mins": "ODOO_CALENDAR_TICK_MINS",
     "ingest_subjects": "ODOO_INGEST_SUBJECTS",
-    "google_sync_window_days": "ODOO_GOOGLE_SYNC_WINDOW_DAYS",
-    "google_token_path": "ODOO_GOOGLE_TOKEN_PATH",
     "day_bucket_tz": "ODOO_DAY_BUCKET_TZ",
     "resync_window_days": "ODOO_RESYNC_WINDOW_DAYS",
     "resync_authors": "ODOO_RESYNC_AUTHORS",
@@ -629,8 +624,6 @@ _BEHAVIOR_DEFAULTS: dict[str, Any] = {
     "round_session_hours": _DEFAULT_ROUND_SESSION_HOURS,
     "calendar_tick_mins": _DEFAULT_CALENDAR_TICK_MINS,
     "ingest_subjects": _DEFAULT_INGEST_SUBJECTS,
-    "google_sync_window_days": _DEFAULT_GOOGLE_SYNC_WINDOW_DAYS,
-    "google_token_path": None,
     "day_bucket_tz": _DEFAULT_DAY_BUCKET_TZ,
     "resync_window_days": _DEFAULT_RESYNC_WINDOW_DAYS,
     "resync_authors": None,
@@ -850,33 +843,10 @@ class LocalConfig:
         )
 
     @property
-    def google_sync_window_days(self) -> int:
-        """Return the Google reconcile window radius in days (default ``30``, #370).
-
-        Calendar mutates retroactively and the sent window is backward-looking, so a
-        resync reconciles events within this many days each side of now. An invalid
-        value falls back to the default.
-        """
-        return _coerce_positive_int(
-            self._behavior.get("google_sync_window_days"),
-            _DEFAULT_GOOGLE_SYNC_WINDOW_DAYS,
-        )
-
-    @property
-    def google_token_path(self) -> Optional[str]:
-        """Return an explicit Google token file path override, or None (#370).
-
-        When unset the puller derives the path from the existing ``ODOO_SDK_CONFIG``
-        mount, so the token lives beside the other host-provisioned SDK config.
-        """
-        value = self._behavior.get("google_token_path")
-        return str(value) if value else None
-
-    @property
     def day_bucket_tz(self) -> ZoneInfo:
         """Return the day-bucketing timezone (default ``America/Chicago``, #378).
 
-        Scoring and rendering bucket a session's wall-clock span onto a calendar day
+        Scoring and rendering bucket a session's wall-clock span onto a local day
         in this zone; a wrong zone mis-buckets evening sessions that cross local
         midnight. An unknown or malformed IANA key falls back to the default.
         """

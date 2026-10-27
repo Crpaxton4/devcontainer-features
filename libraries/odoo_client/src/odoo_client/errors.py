@@ -1,7 +1,7 @@
 """Shared-kernel error façade for internal (and external) consumers.
 
 The canonical error definitions live in the data layer: the Odoo error
-taxonomy in :mod:`odoo_client.transport.errors` and the task-tracker FSM errors
+taxonomy in :mod:`odoo_client.transport.errors` and the tracker error
 in :mod:`odoo_client.tracking.models` (promoted from ``state.models`` by #718;
 the old path remains a sanctioned alias). Higher layers used to reach them through
 ``from odoo_client import ...`` root-imports, which made module import order
@@ -22,16 +22,13 @@ are rejected by the static-analysis gate in ``tools/static_analysis.py``.
 """
 
 # Deliberately imported through the sanctioned ``state.models`` alias rather
-# than the canonical ``tracking.models`` (#718): the FSM classes are the
-# identical objects either way (the alias IS the relocated module), but the
+# than the canonical ``tracking.models`` (#718): the error class is the
+# identical object either way (the alias IS the relocated module), but the
 # alias edge is the one place ADR-005 already permits a data path to reach
 # the promoted vocabulary — importing the core module here directly would
 # thread a new data→core chain through every data-layer consumer of this
 # façade (services -> errors -> tracking), which rules 3/6 rightly reject.
 from .state.models import (
-    InvalidStateTransitionError,
-    TaskAlreadyRunningError,
-    TaskNotRunningError,
     TrackerStateMissingError,
 )
 from .transport.errors import (
@@ -55,9 +52,6 @@ __all__ = [
     "OdooTransportError",
     "OdooServerError",
     "DeletionNotSupportedError",
-    # Task-tracker FSM errors (canonical: odoo_client.tracking.models, #718)
+    # Tracker error (canonical: odoo_client.tracking.models, #718)
     "TrackerStateMissingError",
-    "TaskAlreadyRunningError",
-    "TaskNotRunningError",
-    "InvalidStateTransitionError",
 ]

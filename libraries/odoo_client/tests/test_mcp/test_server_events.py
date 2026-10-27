@@ -49,12 +49,12 @@ class TestDispatchEmitsEvent(unittest.TestCase):
         db = _tmp_db()
         registry = Registry(Mock(), state_client=db)
 
-        def start_task(task_id: int, task_name: str) -> dict:
+        def task_note(task_id: int, task_name: str) -> dict:
             """Fake tool."""
             return {"task_id": task_id}
 
-        tools = _build_tools(registry, {"start_task": start_task})
-        result = tools["start_task"].fn(task_id=42, task_name="Fix VAT")
+        tools = _build_tools(registry, {"task_note": task_note})
+        result = tools["task_note"].fn(task_id=42, task_name="Fix VAT")
 
         self.assertEqual(result, {"task_id": 42})
         events = db.get_events()
@@ -62,7 +62,7 @@ class TestDispatchEmitsEvent(unittest.TestCase):
         event = events[0]
         self.assertEqual(event.source, "agent")
         # Only the tool name is persisted as subject; no argument values.
-        self.assertEqual(event.subject, "start_task")
+        self.assertEqual(event.subject, "task_note")
         self.assertEqual(event.task_ids, ["42"])
         # The payload is reconstructable (#626): the tool name, the argument
         # NAMES (shape, not content -- the task_name value "Fix VAT" is
@@ -72,7 +72,7 @@ class TestDispatchEmitsEvent(unittest.TestCase):
         self.assertEqual(
             event.payload,
             {
-                "tool": "start_task",
+                "tool": "task_note",
                 "args": ["task_id", "task_name"],
                 "outcome": "ok",
                 "task_id": 42,
@@ -123,24 +123,6 @@ class TestDispatchEmitsEvent(unittest.TestCase):
             {"tool": "get_task", "args": ["task_id"], "outcome": "ok"},
         )
 
-    def test_read_tool_inside_an_open_run_still_bills_that_run(self):
-        # #1040 removes the HINT, not the #507 context fallback: inspecting task
-        # 42 while a run on task 101 is open is time spent on 101.
-        db = _tmp_db()
-        db.create_run(101, "Task A", 1, "Proj")
-        registry = Registry(Mock(), state_client=db)
-
-        def get_task(task_id: int) -> dict:
-            """Fake tool."""
-            return {"ok": True}
-
-        tools = _build_tools(registry, {"get_task": get_task})
-        tools["get_task"].fn(task_id=42)
-
-        event = db.get_events()[0]
-        self.assertEqual(event.task_ids, ["101"])
-        self.assertEqual(event.payload[READ_TASK_IDS_PAYLOAD_KEY], ["42"])
-
     def test_tool_without_task_id_and_no_active_run_is_untargeted(self):
         db = _tmp_db()
         registry = Registry(Mock(), state_client=db)
@@ -163,37 +145,16 @@ class TestDispatchEmitsEvent(unittest.TestCase):
             {"tool": "ping", "args": ["message"], "outcome": "ok"},
         )
 
-    def test_tool_without_task_id_attributes_to_the_active_run(self):
-        # Regression for #507: attribution used to key on whether the tool's
-        # signature happened to contain a parameter named ``task_id``, so an
-        # inspection-only tool called mid-run wrote an event with an empty
-        # ``task_ids`` -- permanently excluded from session derivation, and
-        # therefore permanently unbillable. All interaction with a task is
-        # active work on it, so the active run now claims the event.
+    def test_explicit_task_id_is_attributed(self):
         db = _tmp_db()
-        db.create_run(101, "Task A", 1, "Proj")
         registry = Registry(Mock(), state_client=db)
 
-        def report_runs(since: str) -> dict:
+        def task_note(task_id: int) -> dict:
             """Fake tool."""
             return {"ok": True}
 
-        tools = _build_tools(registry, {"report_runs": report_runs})
-        tools["report_runs"].fn(since="today")
-
-        self.assertEqual(db.get_events()[0].task_ids, ["101"])
-
-    def test_explicit_task_id_still_wins_over_the_active_run(self):
-        db = _tmp_db()
-        db.create_run(101, "Task A", 1, "Proj")
-        registry = Registry(Mock(), state_client=db)
-
-        def stop_task(task_id: int) -> dict:
-            """Fake tool."""
-            return {"ok": True}
-
-        tools = _build_tools(registry, {"stop_task": stop_task})
-        tools["stop_task"].fn(task_id=999)
+        tools = _build_tools(registry, {"task_note": task_note})
+        tools["task_note"].fn(task_id=999)
 
         self.assertEqual(db.get_events()[0].task_ids, ["999"])
 
@@ -386,7 +347,7 @@ class TestPayloadEnrichment(unittest.TestCase):
         db = _tmp_db()
         registry = Registry(Mock(), state_client=db)
 
-        def stop_task(task_id: int) -> dict:
+        def create_task(task_id: int) -> dict:
             """Fake tool."""
             return {
                 "run_id": 12,
@@ -394,15 +355,14 @@ class TestPayloadEnrichment(unittest.TestCase):
                 "branch_name": "4242#fix-vat",
                 "pr_url": "https://github.com/o/r/pull/9",
                 "test_result": "passed",
-                "run_summary": "actions: task_note x2; branch 4242#fix-vat",
                 "chatter": "free text that must NOT be lifted",
             }
 
-        tools = _build_tools(registry, {"stop_task": stop_task})
-        tools["stop_task"].fn(task_id=4242)
+        tools = _build_tools(registry, {"create_task": create_task})
+        tools["create_task"].fn(task_id=4242)
 
         payload = db.get_events()[0].payload
-        self.assertEqual(payload["tool"], "stop_task")
+        self.assertEqual(payload["tool"], "create_task")
         self.assertEqual(payload["args"], ["task_id"])
         self.assertEqual(payload["outcome"], "ok")
         self.assertEqual(payload["run_id"], 12)
@@ -410,11 +370,6 @@ class TestPayloadEnrichment(unittest.TestCase):
         self.assertEqual(payload["branch_name"], "4242#fix-vat")
         self.assertEqual(payload["pr_url"], "https://github.com/o/r/pull/9")
         self.assertEqual(payload["test_result"], "passed")
-        # The machine-derived run summary is internal text with NO length cap
-        # and rides along as the event's one-line outcome narrative.
-        self.assertEqual(
-            payload["run_summary"], "actions: task_note x2; branch 4242#fix-vat"
-        )
         # Unlisted result keys (free text) never reach the payload.
         self.assertNotIn("chatter", payload)
 
@@ -479,7 +434,6 @@ class TestPayloadEnrichment(unittest.TestCase):
 _READ_TOOLS = frozenset(
     {
         "assign_event",
-        "discover_runs",
         "get_activities",
         "get_employee_id",
         "get_mail_status",
@@ -490,13 +444,11 @@ _READ_TOOLS = frozenset(
         "get_tasks",
         "get_todo",
         "get_uid",
-        "list_runs",
         "normalize_timesheets",
         "optimize_sessions",
         "query_sessions",
         "read_attachment",
         "read_knowledge_article",
-        "report_runs",
         "resync",
         "search_activity_types",
         "search_chatter",
@@ -506,7 +458,6 @@ _READ_TOOLS = frozenset(
         "search_tasks",
         "task_aging",
         "task_list",
-        "task_status",
         "timesheet_summary",
         "unbilled_hours",
         "unlogged_time_report",
@@ -542,7 +493,7 @@ class TestAttributingToolSet(unittest.TestCase):
             self.assertNotIn(name, server_mod.ATTRIBUTING_TOOLS, name)
 
     def test_the_session_mutators_do_attribute(self):
-        for name in ("start_task", "stop_task", "resume_task", "task_note"):
+        for name in ("task_note", "task_question", "create_task"):
             self.assertIn(name, server_mod.ATTRIBUTING_TOOLS, name)
 
 

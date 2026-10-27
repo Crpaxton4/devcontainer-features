@@ -1,7 +1,7 @@
 """Pure Markdown/HTML conversion helpers.
 
 These functions accept and return only primitives; they perform no Odoo I/O and
-have no side effects, so they belong to the utilities (pure functional) layer.
+have no side effects, so they are importable from any layer.
 """
 
 import io

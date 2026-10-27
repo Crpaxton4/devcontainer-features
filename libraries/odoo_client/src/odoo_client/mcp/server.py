@@ -18,7 +18,6 @@ from mcp.types import InputRequiredResult
 
 from odoo_client._utils import declare_usage, record_usage
 from odoo_client.commands import Registry
-from odoo_client.mcp.tools import GATED_TOOL_NAMES, GATED_TOOL_TAG, gated_opt_in
 
 # Re-imported under their historical module attributes (#713): the dispatch
 # boundary vocabulary and telemetry emitter moved to the core layer
@@ -314,14 +313,14 @@ def _usage_logged(tool_fn: Callable[..., Any], name: str) -> Callable[..., Any]:
 
 
 def _usage_declarations(
-    tool_names: list[str], registry: Registry, gated: frozenset[str]
+    tool_names: list[str], registry: Registry
 ) -> list[dict[str, Any]]:
     """Return the usage-log declarations for the tools and registry commands."""
     items = [
         {
             "kind": "mcp_tool",
             "name": tool,
-            "context": {"source": "odoo_client", "gated": tool in gated},
+            "context": {"source": "odoo_client"},
         }
         for tool in tool_names
     ]
@@ -346,18 +345,16 @@ class OdooMCPServer:
     per tool with a real, typed signature that delegates to a command. The server
     performs no auto-reflection of command ``execute`` signatures: the tool
     surface is exactly what ``explicit_tools`` provides. This keeps the wire
-    schema an intentional part of the interaction surface and lets composition
-    tools (which take the FastMCP ``ctx``) coexist with atomic tools uniformly.
+    schema an intentional part of the interaction surface.
 
     :param registry: Registry that owns the shared command dependencies. It is
-        retained for prompt registration and is the registry the explicit tools
-        compose.
+        the registry the explicit tools compose.
     :type registry: Registry
     :param server_name: Human-readable name advertised by the MCP server.
     :type server_name: str
     :param explicit_tools: Mapping of tool name to either a tool callable or a
         ``(callable, description)`` pair. When omitted, the server exposes no
-        tools (only prompts), defaults to None.
+        tools, defaults to None.
     :type explicit_tools: Optional[dict[str, ToolSpec]]
     :param profiling: When True, wrap every tool dispatch in :mod:`cProfile` and
         dump a zipped profile per call. Defaults to False (zero overhead).
@@ -375,8 +372,6 @@ class OdooMCPServer:
         profiling: bool = False,
         instructions: str = DEFAULT_INSTRUCTIONS,
     ):
-        from odoo_client.mcp.prompts import register_builtin_prompts
-
         self.registry: Registry = registry
         self._explicit_tools: dict[str, ToolSpec] = explicit_tools or {}
         self.profiling: bool = profiling
@@ -385,7 +380,6 @@ class OdooMCPServer:
             instructions=instructions,
         )
         self._register_tools()
-        register_builtin_prompts(self.mcp, self.registry)
 
     def _register_tools(self) -> None:
         """Register each explicit tool with the FastMCP server.
@@ -403,19 +397,10 @@ class OdooMCPServer:
         the original typed signature so the wire schema (including any FastMCP
         ``ctx`` parameter) is unchanged.
 
-        Gating is native fastmcp visibility (#715): every tool named in
-        :data:`GATED_TOOL_NAMES` registers with the :data:`GATED_TOOL_TAG` tag,
-        and when any such tool was registered without the
-        ``ODOO_MCP_INCLUDE_GATED`` opt-in the tag is disabled wholesale via
-        ``FastMCP.disable(tags=...)`` — a disabled tool is absent from
-        ``list_tools`` *and* uncallable, so handing the server the full surface
-        exposes exactly the everyday working set by default.
-
         :return: None.
         :rtype: None
         """
 
-        any_gated = False
         for name, spec in self._explicit_tools.items():
             tool_fn, description = self._unpack_spec(spec)
             tool_fn = _usage_logged(tool_fn, name)
@@ -424,25 +409,16 @@ class OdooMCPServer:
             tool_fn = _toon_encoded(tool_fn)
             if self.profiling:
                 tool_fn = _profiled(tool_fn, name)
-            gated = name in GATED_TOOL_NAMES
-            any_gated = any_gated or gated
             self.mcp.add_tool(
                 Tool.from_function(
                     tool_fn,
                     name=name,
                     description=description or None,
-                    tags={GATED_TOOL_TAG} if gated else None,
                 )
             )
-        if any_gated and not gated_opt_in():
-            self.mcp.disable(tags={GATED_TOOL_TAG})
         if os.environ.get("USAGE_LOG_DIR", "").strip():
             declare_usage(
-                _usage_declarations(
-                    list(self._explicit_tools),
-                    self.registry,
-                    frozenset(GATED_TOOL_NAMES),
-                )
+                _usage_declarations(list(self._explicit_tools), self.registry)
             )
 
     @staticmethod

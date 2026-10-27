@@ -78,7 +78,7 @@ class TestMcpUsageLine(unittest.TestCase):
             {
                 "kind": "mcp_tool",
                 "name": "ping",
-                "context": {"source": "odoo_client", "gated": False},
+                "context": {"source": "odoo_client"},
             },
             items,
         )

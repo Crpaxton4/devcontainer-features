@@ -8,11 +8,9 @@ command directly against a schema-provisioned temp DB and assert the persisted
 row, so the shared write contract is pinned in one place.
 """
 
-import os
-import sqlite3
 import subprocess
 import unittest
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Optional
 from unittest.mock import Mock, patch
 
@@ -20,13 +18,10 @@ from odoo_client.commands import LogEventCommand
 from odoo_client.commands.builtin import BUILTIN_COMMANDS
 from odoo_client.commands.log_event import (
     _CONVENTIONAL_BRANCH_TYPES,
-    billable_task_ids,
     current_branch_label,
     normalize_task_ids,
     task_ids_from_branch,
 )
-from odoo_client.reap import REAP_THRESHOLD_ENV
-from odoo_client.state import ATTACHED_TASK_IDS_PAYLOAD_KEY
 from tests.support import make_state_db, make_state_db_path
 
 #: Patch targets for the two best-effort git lookups the command performs. Every
@@ -208,41 +203,6 @@ class TestTaskIdsFromBranch(unittest.TestCase):
         self.assertEqual(task_ids_from_branch(f"{task_id}-{slug}"), [str(task_id)])
 
 
-class TestBillableTaskIds(unittest.TestCase):
-    """The hook fan-out exclusion, unit-tested on its own (#1040, #779)."""
-
-    def test_hook_event_drops_the_attachment_only_ids(self) -> None:
-        self.assertEqual(
-            billable_task_ids("claude:PreToolUse", ["101", "202"], ["101", "202"]), []
-        )
-
-    def test_hook_event_keeps_the_corroborated_id(self) -> None:
-        self.assertEqual(
-            billable_task_ids("claude:Stop", ["28788", "101"], ["101"]), ["28788"]
-        )
-
-    def test_agent_source_is_untouched(self) -> None:
-        # Hook-scoped on purpose: an agent tool call inside an open run is a
-        # human driving that run (#507).
-        self.assertEqual(
-            billable_task_ids("agent", ["101", "202"], ["101", "202"]), ["101", "202"]
-        )
-
-    def test_other_sources_are_untouched(self) -> None:
-        for source in ("commit", "chatter", "merge", "claude", ""):
-            self.assertEqual(
-                billable_task_ids(source, ["101"], ["101"]), ["101"], source
-            )
-
-    def test_no_attachment_is_a_no_op(self) -> None:
-        self.assertEqual(billable_task_ids("claude:Stop", ["28788"], []), ["28788"])
-
-    def test_order_is_preserved(self) -> None:
-        self.assertEqual(
-            billable_task_ids("claude:Stop", ["3", "1", "2"], ["1"]), ["3", "2"]
-        )
-
-
 class TestCurrentBranchLabel(unittest.TestCase):
     """Branch resolution is best-effort: it never raises on the write path."""
 
@@ -277,7 +237,7 @@ class TestAttributionPolicy(unittest.TestCase):
 
     An event that lands with an empty ``task_ids`` is excluded from session
     derivation permanently and can therefore never bill, so an unhinted event
-    written while a run is active attributes to that run.
+    recovers its task from the stated ``<task-id>-<slug>`` session branch.
     """
 
     def setUp(self) -> None:
@@ -288,61 +248,24 @@ class TestAttributionPolicy(unittest.TestCase):
             patcher = patch(target, return_value="")
             patcher.start()
             self.addCleanup(patcher.stop)
-        self.addCleanup(os.environ.pop, REAP_THRESHOLD_ENV, None)
 
-    def _backdate(self, run_id: int, hours: float) -> None:
-        """Backdate one run's ``started_at`` so it reads as stale."""
-        old = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
-        conn = sqlite3.connect(str(self.db_path))
-        conn.execute("UPDATE task_runs SET started_at = ? WHERE id = ?", (old, run_id))
-        conn.commit()
-        conn.close()
-
-    def test_explicit_hint_wins_over_active_runs(self) -> None:
-        self.db.create_run(101, "Task A", 1, "Proj")
+    def test_explicit_hint_wins(self) -> None:
         self.assertEqual(self.command.resolve_task_ids([999]), ["999"])
-
-    def test_unhinted_attributes_to_every_active_run(self) -> None:
-        self.db.create_run(101, "Task A", 1, "Proj")
-        self.db.create_run(202, "Task B", 1, "Proj")
-        self.assertEqual(sorted(self.command.resolve_task_ids()), ["101", "202"])
 
     def test_unhinted_with_no_active_run_is_untargeted(self) -> None:
         self.assertEqual(self.command.resolve_task_ids(), [])
 
+    def test_uncoercible_hint_leaves_the_event_unhinted(self) -> None:
+        self.assertEqual(self.command.resolve_task_ids(["abc"]), [])
+
     def test_attach_active_run_disabled_stays_untargeted(self) -> None:
-        self.db.create_run(101, "Task A", 1, "Proj")
         self.assertEqual(self.command.resolve_task_ids(attach_active_run=False), [])
 
-    def test_uncoercible_hint_falls_back_to_active_runs(self) -> None:
-        # The MCP wrapper hands over whatever the bound ``task_id`` held. A
-        # value that names no task leaves the event unhinted, not unattributed.
-        self.db.create_run(101, "Task A", 1, "Proj")
-        self.assertEqual(self.command.resolve_task_ids(["abc"]), ["101"])
-
-    def test_stale_run_is_excluded(self) -> None:
-        self.db.create_run(101, "Fresh", 1, "Proj")
-        stale = self.db.create_run(202, "Wedged", 1, "Proj")
-        self._backdate(stale.id, 30)
-        self.assertEqual(self.command.resolve_task_ids(), ["101"])
-
-    def test_env_override_widens_staleness_threshold(self) -> None:
-        stale = self.db.create_run(202, "Wedged", 1, "Proj")
-        self._backdate(stale.id, 30)
-        os.environ[REAP_THRESHOLD_ENV] = "48"
-        self.assertEqual(self.command.resolve_task_ids(), ["202"])
-
-    def test_branch_recovers_task_id_when_no_active_run(self) -> None:
-        # The #574 fix: a session bound to a task branch but never start_task-ed
-        # (so no FSM run exists) still attributes to that task, not triage.
+    def test_branch_recovers_task_id(self) -> None:
+        # The #574 fix: a session bound to a task branch attributes to that task,
+        # not triage.
         self.assertEqual(
             self.command.resolve_task_ids(branch="28788-hook-fix"), ["28788"]
-        )
-
-    def test_active_run_wins_over_branch(self) -> None:
-        self.db.create_run(101, "Task A", 1, "Proj")
-        self.assertEqual(
-            self.command.resolve_task_ids(branch="28788-hook-fix"), ["101"]
         )
 
     def test_explicit_hint_wins_over_branch(self) -> None:
@@ -364,7 +287,7 @@ class TestAttributionPolicy(unittest.TestCase):
         )
 
     def test_execute_recovers_task_from_stated_branch(self) -> None:
-        # End to end: the hook vector (no active run, a stated task branch) lands
+        # End to end: the hook vector (a stated task branch) lands
         # a billable, sessionizable row instead of an untargeted triage one.
         result = self.command.execute(
             source="claude:PostToolUse", subject="Bash", branch="28788-hook-fix"
@@ -386,106 +309,9 @@ class TestAttributionPolicy(unittest.TestCase):
         self.assertEqual(event.task_ids, [])
         self.assertEqual(event.branch, "28788-ambient")
 
-    def test_execute_persists_the_active_run_fallback(self) -> None:
-        # The end-to-end shape the MCP dispatch path now takes: a tool call with
-        # no ``task_id`` still lands a billable, sessionizable row.
-        self.db.create_run(101, "Task A", 1, "Proj")
-        result = self.command.execute(source="agent", subject="get_task")
-        self.assertEqual(self.db.get_events()[0].task_ids, ["101"])
-        self.assertEqual(result["task_ids"], ["101"])
-
     def test_execute_normalizes_the_explicit_hint(self) -> None:
         self.command.execute(source="agent", task_ids=[42])
         self.assertEqual(self.db.get_events()[0].task_ids, ["42"])
-
-
-class TestAttachmentProvenance(unittest.TestCase):
-    """Rule-2 ids are recorded as attachment-only so liveness stays honest (#779).
-
-    The id itself still lands in ``task_ids`` — an attached event is billable
-    attribution and the derivation must keep seeing it. What the marker changes is
-    only whether the reaper may read that event back as evidence the run is alive.
-    """
-
-    def setUp(self) -> None:
-        self.db = make_state_db()
-        self.command = LogEventCommand(state=self.db)
-        for target in (REPO_LABEL, BRANCH_LABEL):
-            patcher = patch(target, return_value="")
-            patcher.start()
-            self.addCleanup(patcher.stop)
-
-    def _payload(self) -> Optional[dict]:
-        return self.db.get_events()[0].payload
-
-    def test_attached_ids_are_marked(self) -> None:
-        self.db.create_run(101, "Task A", 1, "Proj")
-        self.db.create_run(202, "Task B", 1, "Proj")
-        self.command.execute(source="claude:PostToolUse", payload={"tool": "Bash"})
-        event = self.db.get_events()[0]
-        # The hook event records both runs as attachment-only provenance and
-        # bills neither of them: #1040 drops the fan-out from ``task_ids``.
-        self.assertEqual(event.task_ids, [])
-        self.assertEqual(
-            sorted(event.payload[ATTACHED_TASK_IDS_PAYLOAD_KEY]), ["101", "202"]
-        )
-        # The caller's own payload keys survive untouched.
-        self.assertEqual(event.payload["tool"], "Bash")
-
-    def test_agent_event_still_bills_the_attached_run(self) -> None:
-        # The exclusion is hook-scoped: a ``source="agent"`` tool call made
-        # inside an open run is a human driving that run, and keeping it billable
-        # is the #507 behaviour #1040 must not undo.
-        self.db.create_run(101, "Task A", 1, "Proj")
-        self.command.execute(source="agent", subject="get_task")
-        event = self.db.get_events()[0]
-        self.assertEqual(event.task_ids, ["101"])
-        self.assertEqual(event.payload[ATTACHED_TASK_IDS_PAYLOAD_KEY], ["101"])
-
-    def test_marker_is_added_to_a_payloadless_event(self) -> None:
-        self.db.create_run(101, "Task A", 1, "Proj")
-        self.command.execute(source="claude:Stop")
-        self.assertEqual(self._payload(), {ATTACHED_TASK_IDS_PAYLOAD_KEY: ["101"]})
-
-    def test_explicit_hint_is_not_marked(self) -> None:
-        self.db.create_run(101, "Task A", 1, "Proj")
-        self.command.execute(
-            source="agent", payload={"tool": "get_task"}, task_ids=[101]
-        )
-        self.assertEqual(self._payload(), {"tool": "get_task"})
-
-    def test_branch_recovery_is_not_marked(self) -> None:
-        self.command.execute(source="claude:Stop", branch="28788-hook-fix")
-        self.assertIsNone(self._payload())
-
-    def test_branch_corroborated_active_run_is_not_marked(self) -> None:
-        # The session is sitting on the task's own branch, so its events name the
-        # task for a reason beyond the run being open: genuine liveness evidence.
-        self.db.create_run(28788, "Task A", 1, "Proj")
-        self.command.execute(source="claude:Stop", branch="28788-hook-fix")
-        self.assertIsNone(self._payload())
-
-    def test_only_the_uncorroborated_run_is_marked(self) -> None:
-        self.db.create_run(28788, "Worked", 1, "Proj")
-        self.db.create_run(101, "Forgotten", 1, "Proj")
-        self.command.execute(source="claude:Stop", branch="28788-hook-fix")
-        self.assertEqual(self._payload(), {ATTACHED_TASK_IDS_PAYLOAD_KEY: ["101"]})
-
-    def test_caller_supplied_marker_is_never_trusted(self) -> None:
-        # The command owns the key: no frontend gets to fake liveness for a
-        # wedged run (or fake staleness for a live one) by stating it.
-        self.command.execute(
-            source="agent",
-            task_ids=[42],
-            payload={"tool": "x", ATTACHED_TASK_IDS_PAYLOAD_KEY: ["99"]},
-        )
-        self.assertEqual(self._payload(), {"tool": "x"})
-
-    def test_callers_payload_is_not_mutated(self) -> None:
-        self.db.create_run(101, "Task A", 1, "Proj")
-        payload = {"tool": "Bash"}
-        self.command.execute(source="claude:PostToolUse", payload=payload)
-        self.assertEqual(payload, {"tool": "Bash"})
 
 
 class TestProvenanceResolution(unittest.TestCase):

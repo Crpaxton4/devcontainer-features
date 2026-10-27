@@ -24,29 +24,22 @@ import subprocess
 from typing import Any, Optional, Tuple
 
 from odoo_client.errors import OdooError
-from odoo_client.tracking.models import (
-    TaskAlreadyRunningError,
-    TaskNotRunningError,
-    TrackerStateMissingError,
-)
+from odoo_client.tracking.models import TrackerStateMissingError
 
 from .log_event import LogEventCommand, normalize_task_ids
 
 #: Exceptions the dispatch error boundary renders as a structured payload.
 #: Every entry is a caller-actionable failure — a classified Odoo fault
-#: (:class:`~odoo_client.transport.errors.OdooError` and its subclasses), a
-#: session-state violation, an absent host-provisioned tracker DB, a failed git
-#: invocation from the ``start_task`` branch setup
-#: (``subprocess.CalledProcessError``, #541 — it used to escape as a stack
-#: trace), or invalid input (``ValueError``) — a shape an LLM can reason about
+#: (:class:`~odoo_client.transport.errors.OdooError` and its subclasses), an
+#: absent tracker DB, a failed git
+#: invocation (``subprocess.CalledProcessError``, #541 — it used to escape as a
+#: stack trace), or invalid input (``ValueError``) — a shape an LLM can reason about
 #: and retry. Anything not listed (``KeyError``, ``AttributeError``, ...) is a
 #: programming error and is deliberately left to propagate as an unhandled
 #: traceback. Shared verbatim by the MCP error boundary and the CLI ``cmd``
 #: dispatcher (#713) so both surfaces classify failures identically.
 _BOUNDARY_ERRORS: Tuple[type[BaseException], ...] = (
     OdooError,
-    TaskNotRunningError,
-    TaskAlreadyRunningError,
     TrackerStateMissingError,
     subprocess.CalledProcessError,
     ValueError,
@@ -66,8 +59,7 @@ def _error_payload(exc: BaseException) -> dict[str, dict[str, str]]:
 #: Tool names whose bound ``task_id`` is an attribution *hint* (#1040).
 #:
 #: Every entry MUTATES the task it names — it writes to the Odoo record (chatter
-#: note/question, a new task, an activity) or to the tracker run FSM (start /
-#: stop / resume / close / abort). Naming a task to such a tool is itself work on
+#: note/question, a new task, an activity). Naming a task to such a tool is itself work on
 #: that task, so the event it emits attributes to it.
 #:
 #: Every other built-in is deliberately absent, which is the whole point. A tool
@@ -84,26 +76,11 @@ def _error_payload(exc: BaseException) -> dict[str, dict[str, str]]:
 #: their target task would bill the act of correcting that task's time — the
 #: self-perpetuating loop #1040 reports from retagging.
 #:
-#: Reads still attribute to an OPEN run through
-#: :meth:`~odoo_client.commands.log_event.LogEventCommand.resolve_task_ids` rule 2
-#: (#507): inspecting task B while a run on task A is open is time spent on A.
-#: What this set removes is only the *hint* — the claim that the queried id is
-#: the task being worked.
-#:
 #: Pinned by ``tests/test_mcp/test_server_events.py``, which enumerates every
 #: built-in command and asserts each one is classified exactly once, so a new
 #: command cannot silently default into either behaviour.
 ATTRIBUTING_TOOLS: frozenset[str] = frozenset(
     {
-        # Tracker run FSM writes.
-        "start_task",
-        "stop_task",
-        "resume_task",
-        "close_task",
-        "abort_task",
-        "abort_run",
-        "stop_run",
-        "stop_all",
         # Odoo record writes.
         "task_note",
         "task_question",
@@ -180,7 +157,7 @@ def _queried_task_ids(name: str, arguments: dict[str, Any]) -> list[str]:
 
 #: Identifier-shaped result fields lifted into the agent-event payload (#626).
 #: Every key names an identifier, provenance marker, or machine-derived outcome
-#: (``run_summary`` is the automatic narrative ``stop_task`` computes) — never a
+#: — never a
 #: caller-supplied free-text input. Payloads are internal/local text with NO
 #: length limit; the 500-character cap (``enforce_chatter_body_limit``) applies
 #: only to chatter bodies posted to Odoo.
@@ -197,7 +174,6 @@ _RESULT_PAYLOAD_KEYS = (
     "test_result",
     "timesheet_id",
     "message_id",
-    "run_summary",
 )
 
 
@@ -271,7 +247,7 @@ def _emit_tool_event(
     middle ground the event-record policy review recommended for #510), a
     one-line ``outcome``, and the allowlisted identifier fields lifted from the
     result (:data:`_RESULT_PAYLOAD_KEYS` — run/branch/PR/test identifiers and
-    the machine-derived ``run_summary``). Chatter note bodies, stakeholder
+    ). Chatter note bodies, stakeholder
     questions, search queries, and other free-text *inputs* are still never
     written to the local events store, matching the ``claude-event-hook`` shim's
     stance of recording tool identifiers without prompt/``tool_input``
@@ -281,9 +257,7 @@ def _emit_tool_event(
     Neither the task scope nor the repo/branch provenance is decided here. The
     bound ``task_id`` of a MUTATING tool (:data:`ATTRIBUTING_TOOLS`) is handed
     over as an attribution *hint* and the command applies the shared policy —
-    falling back to the active runs for an unhinted event, so a tool call made
-    inside an open run is attributed to that run rather than left permanently
-    unbillable (#507). A READ tool's queried id is NOT a hint (#1040): it rides
+    falling back to the stated branch for an unhinted event (#507). A READ tool's queried id is NOT a hint (#1040): it rides
     in the payload under :data:`READ_TASK_IDS_PAYLOAD_KEY` as evidence, so
     investigating a task no longer mints a billable session on it. ``repo`` and
     ``branch`` are likewise left unstated so the command resolves them from the

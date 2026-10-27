@@ -28,7 +28,7 @@ class TestBootstrapDefaults(unittest.TestCase):
         self.assertIsInstance(registry, Registry)
         # The one loaded config and the one built client are injected into
         # every command the registry resolves.
-        command = registry["list_runs"]
+        command = registry["query_sessions"]
         self.assertIs(command._client, MockClient.return_value)
         self.assertIs(command.config, MockConfig.load.return_value)
 
@@ -69,7 +69,7 @@ class TestBootstrapOverrides(unittest.TestCase):
         # Explicit peers suppress every default construction.
         MockClient.assert_not_called()
         MockConfig.load.assert_not_called()
-        command = registry["list_runs"]
+        command = registry["query_sessions"]
         self.assertIs(command._client, client)
         self.assertIs(command.state, state)
         self.assertIs(command.config, config)
@@ -85,7 +85,7 @@ class TestBootstrapOverrides(unittest.TestCase):
 
         MockClient.assert_not_called()
         MockConfig.load.assert_called_once_with()
-        self.assertIs(registry["list_runs"].config, MockConfig.load.return_value)
+        self.assertIs(registry["query_sessions"].config, MockConfig.load.return_value)
 
     def test_peers_are_keyword_only(self):
         with self.assertRaises(TypeError):

@@ -15,7 +15,6 @@ from odoo_client.adapters.state import (  # noqa: F401
     source_to_event_type,
 )
 from odoo_client.state import (
-    ATTACHED_TASK_IDS_PAYLOAD_KEY,
     LocalConfig,
     LocalStateClient,
     current_repo_label,
@@ -58,8 +57,7 @@ def current_branch_label() -> str:
     way: a detached HEAD or a non-repo cwd yields ``""`` rather than a bogus
     branch name.
 
-    ``symbolic-ref`` is asked rather than ``rev-parse --abbrev-ref`` (the form
-    :mod:`odoo_client.mcp.tools.start_task` uses to *compare* branches) because it
+    ``symbolic-ref`` is asked rather than ``rev-parse --abbrev-ref`` because it
     answers the question this path actually asks. It fails outright on a
     detached HEAD instead of printing the literal ``HEAD`` as if that were a
     branch, and it still names the branch on a repo with no commits yet, where
@@ -125,7 +123,7 @@ def normalize_task_ids(values: Optional[Iterable[Any]]) -> list[str]:
 # commit it accompanies on the SAME task lane rather than splitting them (#378).
 _MIN_TASK_ID_DIGITS = 4
 
-# The ``<task-id>-<slug>`` branch convention ``start_task`` writes (#622: id
+# The ``<task-id>-<slug>`` branch convention task branches follow (#622: id
 # BEFORE the ``-``), anchored to a token start (``^`` or a ``/`` path separator)
 # so a digit run buried mid-token (e.g. ``fixes-1234-x``) is never read as a
 # task id. Kept in lockstep with the same ``(\d+)-`` form in
@@ -137,10 +135,9 @@ _BRANCH_TASK_ID_PATTERN = re.compile(rf"(?:^|[\s,/])(\d{{{_MIN_TASK_ID_DIGITS},}
 # follows the GitHub-issue convention ``<type>/<issue-number>-<slug>``, so its
 # leading digit run is an issue number in the hosting forge, not an Odoo task id
 # (#1040: ``docs/1019-shellcheck-form-per-file-set`` minted phantom task lanes
-# 1016/1019/1020/1029 in a repo with no Odoo project at all). ``start_task``
-# never writes such a branch — it writes ``<task-id>-<slug>`` at the root (#622),
-# or a caller-stated name — so excluding the type prefixes costs no real
-# attribution. Note ``feat`` is listed but ``feature`` is not: only the
+# 1016/1019/1020/1029 in a repo with no Odoo project at all). A task branch is
+# ``<task-id>-<slug>`` at the root (#622), never such a branch, so excluding the
+# type prefixes costs no real attribution. Note ``feat`` is listed but ``feature`` is not: only the
 # conventional-commit spelling carries the convention.
 _CONVENTIONAL_BRANCH_TYPES = frozenset(
     {
@@ -161,12 +158,9 @@ _CONVENTIONAL_BRANCH_TYPES = frozenset(
 def task_ids_from_branch(branch: Optional[str]) -> list[str]:
     """Recover the task ids named by a ``<task-id>-<slug>`` session branch.
 
-    :func:`odoo_client.mcp.tools.start_task` names each task branch
-    ``f"{task_id}-{slug}"`` (#622), so the task identity is derivable from the
-    branch even when the session was never ``start_task``-ed through the FSM and
-    thus has no active run to attribute an event to (#574). This is the last
-    attribution signal consulted before an unhinted event falls through to
-    untargeted triage.
+    A task branch is named ``f"{task_id}-{slug}"`` (#622), so the task identity
+    is derivable from the branch (#574). This is the last attribution signal
+    consulted before an unhinted event falls through to untargeted triage.
 
     Returns the distinct ids in first-seen order, canonicalized through ``int`` so
     a zero-padded ``0028788-…`` records as ``"28788"``. A branch that does not
@@ -193,105 +187,6 @@ def task_ids_from_branch(branch: Optional[str]) -> list[str]:
     return ids
 
 
-#: Source-string prefix of the Claude Code hook shim's events
-#: (``claude:<HookName>``). The shim fires on EVERY tool use in the container,
-#: states no task, and passes ``--attach-active-run``, so its events are the one
-#: family that is ambient rather than targeted — see :func:`billable_task_ids`.
-#: Byte-identical to ``adapters.state_persistence._CLAUDE_SOURCE_PREFIX`` and the
-#: ``LIKE 'claude:%'`` billing predicate; that three-way parity is pinned by
-#: ``tests/test_cli/test_hook_cli_contract.py``.
-_HOOK_SOURCE_PREFIX = "claude:"
-
-
-def billable_task_ids(
-    source: str, task_ids: list[str], attached_task_ids: list[str]
-) -> list[str]:
-    """Drop the hook fan-out from a hook event's billable scope (#1040, #779).
-
-    A ``claude:*`` hook event names no task of its own: the shim fires on every
-    tool use in the container and asks for ``--attach-active-run``, so rule 2 of
-    :meth:`LogEventCommand.resolve_attribution` handed it EVERY open run. With
-    six runs left RUNNING that is six parallel wall-clock sessions off one
-    keystroke — the ~38 h of phantom time #1040 measured, and the regression #779
-    describes from the other side (the attachment also refreshed the staleness
-    clock that was supposed to age those runs out).
-
-    The ids removed here are exactly the attachment-only subset: runs that were
-    merely open, with nothing else tying this event to them.
-    :meth:`LogEventCommand.resolve_attribution` already excludes from that subset
-    any run the caller-stated session branch corroborates, so a session sitting
-    on its task's ``<task-id>-<slug>`` branch keeps billing normally — only the
-    OTHER runs a busy container happens to have open are dropped.
-
-    The ids are NOT discarded: :func:`mark_attached_attribution` still records
-    them in the payload, which is what the reaper's attachment-independent clock
-    reads to decide a forgotten run has gone quiet.
-
-    Hinted events are untouched (rule 1 contributes no attachment-only ids), and
-    so is every non-hook source — a ``source="agent"`` tool call made inside an
-    open run is a human driving that run, and attributing it there is the #507
-    behaviour this must not undo.
-
-    .. note::
-
-       This is the narrow exclusion, not the full fix. Attributing a hook event
-       to the run its ``session_id`` actually started needs a session → run
-       mapping the events table does not have; until then a hook-only session on
-       a non-task branch attributes to nothing rather than to the wrong task.
-
-    :param source: The event's source string, e.g. ``claude:PreToolUse``.
-    :type source: str
-    :param task_ids: The resolved attribution, in resolution order.
-    :type task_ids: list[str]
-    :param attached_task_ids: The attachment-only subset of ``task_ids``.
-    :type attached_task_ids: list[str]
-    :return: The ids the event bills, order preserved.
-    :rtype: list[str]
-    """
-
-    if not attached_task_ids or not source.startswith(_HOOK_SOURCE_PREFIX):
-        return task_ids
-    return [task_id for task_id in task_ids if task_id not in attached_task_ids]
-
-
-def mark_attached_attribution(
-    payload: Optional[dict[str, Any]], attached_task_ids: list[str]
-) -> Optional[dict[str, Any]]:
-    """Return the payload to persist, recording attachment-only attribution (#779).
-
-    The row's ``task_ids`` are unchanged — an attached id is still billable
-    attribution, and the derivation, upload, and every report must keep seeing it.
-    What is recorded here is *why* each id is there, under the state layer's
-    :data:`~odoo_client.state.ATTACHED_TASK_IDS_PAYLOAD_KEY`, so the reaper's
-    staleness clock can ignore the ids this event carries ONLY because their run
-    was active — otherwise the clock is refreshed by the very attachment it is
-    supposed to stop, and a forgotten run never ages out.
-
-    The caller's payload is never mutated (a fresh dict is returned when the key
-    is involved) and an untouched payload is passed through verbatim, including
-    ``None``, so an event with no attachment-only id records exactly what it
-    always did. The command OWNS the key: a caller that supplied one has it
-    replaced or dropped, so no frontend can fake liveness for a wedged run.
-
-    :param payload: The caller's payload, or ``None``.
-    :type payload: Optional[dict[str, Any]]
-    :param attached_task_ids: Ids attributed by attachment alone; may be empty.
-    :type attached_task_ids: list[str]
-    :return: The payload to persist.
-    :rtype: Optional[dict[str, Any]]
-    """
-
-    if attached_task_ids:
-        return {**(payload or {}), ATTACHED_TASK_IDS_PAYLOAD_KEY: attached_task_ids}
-    if payload is None or ATTACHED_TASK_IDS_PAYLOAD_KEY not in payload:
-        return payload
-    return {
-        key: value
-        for key, value in payload.items()
-        if key != ATTACHED_TASK_IDS_PAYLOAD_KEY
-    }
-
-
 class LogEventCommand(Command):
     """Append one row to the local ``events`` timeseries via the command layer.
 
@@ -314,7 +209,7 @@ class LogEventCommand(Command):
       attribution *hint* its interface happens to expose (``--task-id`` from the
       CLI, a bound ``task_id`` argument from the MCP dispatch wrapper), not a
       resolved scope. When the hint names no task the command falls back to the
-      active runs, and then to the ``<task-id>-<slug>`` session branch the caller
+      ``<task-id>-<slug>`` session branch the caller
       states (#574) — because an event that lands with an empty ``task_ids`` is
       excluded from session derivation permanently and can therefore never bill.
     * **Provenance** (``repo`` / ``branch``). Resolved from the working tree at
@@ -363,37 +258,6 @@ class LogEventCommand(Command):
 
         super().__init__(client, state=state, config=config)
 
-    def _active_run_task_ids(self) -> list[str]:
-        """Return the task ids of every non-stale active run, as id strings.
-
-        Stale runs are excluded (#366): a run whose last activity predates the
-        reap threshold (``ODOO_REAP_THRESHOLD_HOURS`` env, default
-        :data:`~odoo_client.tracking.reap.DEFAULT_REAP_THRESHOLD_HOURS`) is a wedged orphan
-        from a dead devcontainer, so attaching an event to it would only accrue
-        phantom billable wall-clock; skipping it keeps it reapable. The same
-        staleness predicate ``reap`` uses is applied here, so the two agree on
-        exactly which runs are stale — and since #779 that predicate reads a clock
-        attachment cannot refresh, so a forgotten run ages out even while the
-        container stays busy rather than only once the container falls silent.
-
-        :mod:`odoo_client.tracking.reap` is imported inside the method rather than at module
-        scope: it reaches ``odoo_client.billing``, which imports the partially
-        initialized ``odoo_client`` package that is itself importing this module.
-        """
-
-        from odoo_client.tracking.reap import (
-            is_run_stale,
-            resolve_env_threshold_hours,
-            threshold_from_hours,
-        )
-
-        threshold = threshold_from_hours(resolve_env_threshold_hours())
-        return [
-            str(run.task_id)
-            for run in self.state.get_all_active_runs()
-            if not is_run_stale(self.state, run, threshold)
-        ]
-
     def resolve_task_ids(
         self,
         task_ids: Optional[Iterable[Any]] = None,
@@ -402,43 +266,30 @@ class LogEventCommand(Command):
     ) -> list[str]:
         """Resolve which tasks an event attributes to — the one attribution rule.
 
-        Attribution used to be decided independently at each write site, keyed on
-        whatever that interface happened to expose: the MCP wrapper attributed an
-        event only when the dispatched tool's signature contained a parameter
-        literally named ``task_id``, so two tools doing equivalent work on the
-        same task landed on opposite sides of the derivation filter (#507). The
-        policy is now stated once, here:
+        The policy is stated once, here:
 
         1. An explicit hint wins. ``task_ids`` is normalized by
            :func:`normalize_task_ids`, so a caller may hand over whatever its
            interface produced without pre-validating it.
-        2. Otherwise the event attributes to every non-stale active run, because
-           all interaction with a task — read-only inspection included — is
-           active work on it. An id that lands here for no reason beyond that run
-           being open is recorded as attachment-only (#779) so it cannot later be
-           read back as evidence the run is alive; see
-           :meth:`resolve_attribution`.
-        3. With no active run, the ``<task-id>-<slug>`` convention of the
-           caller-stated ``branch`` recovers the task id (#574): a session bound
-           to a task branch but never ``start_task``-ed through the FSM still
-           attributes its hook events to that task instead of triage.
-        4. With none of the above (or with ``attach_active_run`` disabled) the
+        2. Otherwise the ``<task-id>-<slug>`` convention of the caller-stated
+           ``branch`` recovers the task id (#574), so a session bound to a task
+           branch still attributes its hook events to that task instead of
+           triage.
+        3. With none of the above (or with ``attach_active_run`` disabled) the
            scope is empty: untargeted session-level activity.
 
-        Steps 2–3 are the "attribute an unhinted event from context" fallback the
-        ``attach_active_run`` flag gates as a unit, so a caller that opts out of
-        it keeps the documented "leave untargeted" contract. Only the branch the
-        caller *states* is consulted (the hook shim reads it from the session's
-        authoritative cwd); the working-tree branch :meth:`execute` resolves for
-        the provenance column is deliberately not, so an incidental checkout never
-        silently re-attributes an event that was never bound to that task.
+        Step 2 is the "attribute an unhinted event from context" fallback the
+        ``attach_active_run`` flag gates. Only the branch the caller *states* is
+        consulted (the hook shim reads it from the session's authoritative cwd);
+        the working-tree branch :meth:`execute` resolves for the provenance
+        column is deliberately not, so an incidental checkout never silently
+        re-attributes an event that was never bound to that task.
 
         :param task_ids: Explicit attribution hint; non-task values are dropped.
         :type task_ids: Optional[Iterable[Any]]
-        :param attach_active_run: Whether to fall back to the active runs and then
-            the session branch when the hint names no task. The CLI passes its
-            ``--attach-active-run`` flag through here to preserve the documented
-            hook-shim contract.
+        :param attach_active_run: Whether to fall back to the session branch when
+            the hint names no task. The CLI passes its ``--attach-active-run``
+            flag through here to preserve the documented hook-shim contract.
         :type attach_active_run: bool
         :param branch: The caller-stated ``<task-id>-<slug>`` session branch to
             recover a task id from when nothing else attributes; ``None`` skips it.
@@ -447,52 +298,12 @@ class LogEventCommand(Command):
         :rtype: list[str]
         """
 
-        return self.resolve_attribution(task_ids, attach_active_run, branch)[0]
-
-    def resolve_attribution(
-        self,
-        task_ids: Optional[Iterable[Any]] = None,
-        attach_active_run: bool = True,
-        branch: Optional[str] = None,
-    ) -> tuple[list[str], list[str]]:
-        """Apply the attribution policy, reporting WHICH ids are attachment-only.
-
-        The policy itself is :meth:`resolve_task_ids`' — this is the one
-        implementation, returning the same ids plus the subset that rule 2 alone
-        put there, so the two can never disagree about which rule fired.
-
-        An id is attachment-only when the event names it for no reason other than
-        that task having an active run. Rule 1 (an explicit hint) and rule 3 (the
-        ``<task-id>-<slug>`` session branch) therefore contribute none. Nor does a
-        rule-2 id the stated branch *corroborates*: a session sitting on a task's
-        own branch is working that task whether or not a run is open, so its
-        events are genuine liveness evidence for it — only the OTHER runs a busy
-        container happens to have open are attachment-only for that event.
-
-        This subset is what keeps the reaper's staleness clock non-circular
-        (#779); see :func:`mark_attached_attribution` for where it is recorded.
-
-        :param task_ids: Explicit attribution hint; non-task values are dropped.
-        :type task_ids: Optional[Iterable[Any]]
-        :param attach_active_run: Whether to fall back to the active runs and the
-            session branch; see :meth:`resolve_task_ids`.
-        :type attach_active_run: bool
-        :param branch: The caller-stated session branch, or ``None``.
-        :type branch: Optional[str]
-        :return: ``(task ids the event attributes to, the attachment-only subset)``.
-        :rtype: tuple[list[str], list[str]]
-        """
-
         explicit = normalize_task_ids(task_ids)
         if explicit:
-            return explicit, []
+            return explicit
         if not attach_active_run:
-            return [], []
-        branch_ids = task_ids_from_branch(branch)
-        active = self._active_run_task_ids()
-        if active:
-            return active, [tid for tid in active if tid not in branch_ids]
-        return branch_ids, []
+            return []
+        return task_ids_from_branch(branch)
 
     def execute(
         self,
@@ -525,7 +336,7 @@ class LogEventCommand(Command):
             payload.
         :type payload: Optional[dict[str, Any]]
         :param task_ids: Explicit attribution hint; see :meth:`resolve_task_ids`
-            for how it combines with the active runs.
+            for how it combines with the session branch.
         :type task_ids: Optional[Iterable[Any]]
         :param repo: Repository label the event originated from; ``None``
             resolves it from the cwd's git remote, ``""`` records none.
@@ -550,12 +361,9 @@ class LogEventCommand(Command):
             ``None``.
         :type timestamp: Optional[datetime]
         :param attach_active_run: Whether an unhinted event falls back to the
-            active runs; see :meth:`resolve_task_ids`.
+            session branch; see :meth:`resolve_task_ids`.
         :type attach_active_run: bool
         :return: ``{"source", "subject", "task_ids"}`` describing the written row.
-            For a ``claude:*`` hook event the ids are the post-exclusion set
-            (:func:`billable_task_ids`), so the caller sees what was actually
-            billed rather than what rule 2 proposed.
         :rtype: dict[str, Any]
         """
 
@@ -564,19 +372,17 @@ class LogEventCommand(Command):
         # only the branch the caller explicitly states (see resolve_task_ids), so
         # ``branch`` — not the resolved fallback — is what is handed to it.
         resolved_branch = current_branch_label() if branch is None else branch
-        resolved_ids, attached_ids = self.resolve_attribution(
-            task_ids, attach_active_run, branch
-        )
+        resolved_ids = self.resolve_task_ids(task_ids, attach_active_run, branch)
         record = EventRecord(
             id=None,
             source=source,
             timestamp=timestamp or datetime.now(timezone.utc),
-            task_ids=billable_task_ids(source, resolved_ids, attached_ids),
+            task_ids=resolved_ids,
             repo=current_repo_label() if repo is None else repo,
             branch=resolved_branch,
             pr_num=pr_num,
             subject=subject,
-            payload=mark_attached_attribution(payload, attached_ids),
+            payload=payload,
             external_id=external_id,
         )
         self.state.add_event(record)

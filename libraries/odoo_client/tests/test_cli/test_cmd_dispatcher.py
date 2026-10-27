@@ -30,15 +30,11 @@ from odoo_client.commands.dispatch_telemetry import (
 )
 from odoo_client.errors import OdooError
 from odoo_client.state import LocalStateClient
-from odoo_client.state.models import (
-    TaskAlreadyRunningError,
-    TaskNotRunningError,
-    TrackerStateMissingError,
-)
+from odoo_client.state.models import TrackerStateMissingError
 from tests.support import make_state_db
 
 BUILD_REGISTRY = "odoo_client.cli.__main__._build_registry"
-ASSERT_GUARD = "odoo_client.cli.__main__.assert_sdk_configured"
+ASSERT_GUARD = "odoo_client.cli.__main__.assert_configured"
 
 
 def _tmp_db() -> LocalStateClient:
@@ -116,28 +112,27 @@ def _patched(registry: Registry):
 
 
 class TestCmdList(unittest.TestCase):
-    def test_list_json_is_the_45_command_contract(self):
+    def test_list_json_is_the_33_command_contract(self):
         # The contract-gate ground truth: every registry command — gated MCP
         # tools included (process trust) — as a {name, description} array.
         code, out = _run_cli("cmd", "--list", "--json")
         self.assertEqual(code, 0)
         entries = json.loads(out)
-        self.assertEqual(len(entries), 45)
+        self.assertEqual(len(entries), 33)
         for entry in entries:
             self.assertEqual(set(entry), {"name", "description"})
             self.assertIsInstance(entry["name"], str)
             self.assertIsInstance(entry["description"], str)
         names = [entry["name"] for entry in entries]
         self.assertEqual(names, sorted(names))
-        # Gated MCP tools are exposed here; so is the CLI-only close_task.
-        for gated in ("abort_run", "search_count", "get_models", "close_task"):
-            self.assertIn(gated, names)
+        for name in ("search_count", "get_models", "resync"):
+            self.assertIn(name, names)
 
     def test_list_human_table(self):
         code, out = _run_cli("cmd", "--list")
         self.assertEqual(code, 0)
         self.assertIn("Command", out)
-        self.assertIn("list_runs", out)
+        self.assertIn("query_sessions", out)
         with self.assertRaises(json.JSONDecodeError):
             json.loads(out)
 
@@ -157,7 +152,7 @@ class TestCmdDispatchSuccess(unittest.TestCase):
     def test_dispatch_without_args_defaults_to_no_kwargs(self):
         db = _tmp_db()
         with _patched(_registry(db)):
-            code, out = _run_cli("cmd", "list_runs")
+            code, out = _run_cli("cmd", "query_sessions")
         self.assertEqual(code, 0)
         self.assertEqual(json.loads(out), [])
 
@@ -217,8 +212,6 @@ class TestCmdDispatchSuccess(unittest.TestCase):
 class TestCmdBoundaryErrors(unittest.TestCase):
     BOUNDARY_INSTANCES = [
         OdooError("odoo unreachable"),
-        TaskNotRunningError("task 5 is not running"),
-        TaskAlreadyRunningError("task 5 already running"),
         TrackerStateMissingError("no tracker database"),
         subprocess.CalledProcessError(1, ["git", "switch"]),
         ValueError("bad input"),
@@ -264,7 +257,7 @@ class TestCmdUsageErrors(unittest.TestCase):
     def test_malformed_args_json_exits_2(self):
         db = _tmp_db()
         with _patched(_registry(db)):
-            code, out = _run_cli("cmd", "list_runs", "--args", "{not json")
+            code, out = _run_cli("cmd", "query_sessions", "--args", "{not json")
         self.assertEqual(code, 2)
         payload = json.loads(out)
         self.assertEqual(payload["error"]["type"], "ValueError")
@@ -273,7 +266,7 @@ class TestCmdUsageErrors(unittest.TestCase):
     def test_non_object_args_json_exits_2(self):
         db = _tmp_db()
         with _patched(_registry(db)):
-            code, out = _run_cli("cmd", "list_runs", "--args", "[1, 2]")
+            code, out = _run_cli("cmd", "query_sessions", "--args", "[1, 2]")
         self.assertEqual(code, 2)
         self.assertEqual(
             json.loads(out)["error"]["message"], "--args must be a JSON object"
@@ -310,24 +303,10 @@ class TestCmdLazyClient(unittest.TestCase):
         ):
             registry = _registry(db, client=cli._LazyOdooClient())
             with _patched(registry):
-                code, out = _run_cli("cmd", "list_runs")
+                code, out = _run_cli("cmd", "query_sessions")
         self.assertEqual(code, 0)
         self.assertEqual(json.loads(out), [])
         make_client.assert_not_called()
-
-    def test_query_sessions_takes_a_source_key_in_args(self):
-        # #1086: the sessions query selects its record through the JSON args.
-        db = _tmp_db()
-        with _patched(_registry(db)):
-            code, out = _run_cli(
-                "cmd", "query_sessions", "--args", json.dumps({"source": "events"})
-            )
-            self.assertEqual((code, json.loads(out)), (0, []))
-            code, out = _run_cli(
-                "cmd", "query_sessions", "--args", json.dumps({"source": "nope"})
-            )
-        self.assertEqual(code, 1)
-        self.assertEqual(json.loads(out)["error"]["type"], "ValueError")
 
     def test_list_builds_no_state_and_no_client(self):
         # ``cmd --list`` walks the real (unpatched) registry factory: with the
@@ -336,7 +315,7 @@ class TestCmdLazyClient(unittest.TestCase):
         with patch("odoo_client.cli.__main__.OdooClient") as make_client:
             code, out = _run_cli("cmd", "--list", "--json")
         self.assertEqual(code, 0)
-        self.assertEqual(len(json.loads(out)), 45)
+        self.assertEqual(len(json.loads(out)), 33)
         make_client.assert_not_called()
 
 

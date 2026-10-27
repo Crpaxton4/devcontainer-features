@@ -1,6 +1,6 @@
-"""Local state layer: session FSM store and resolved SDK configuration.
+"""Local state layer: event store and resolved SDK configuration.
 
-Both :class:`LocalStateClient` (SQLite-backed task-session FSM) and
+Both :class:`LocalStateClient` (SQLite-backed event store) and
 :class:`LocalConfig` (File > Env > Default settings) are peer dependencies
 injected into commands alongside :class:`~odoo_client.client.client.OdooClient`.
 """
@@ -11,7 +11,6 @@ from .config import (
     OdooConnectionSettings,
 )
 from .db import (
-    ATTACHED_TASK_IDS_PAYLOAD_KEY,
     LocalStateClient,
     SCHEMA_DDL,
     assert_tracker_db_present,
@@ -21,27 +20,17 @@ from .db import (
 )
 from .models import (
     EventRecord,
-    InvalidStateTransitionError,
-    SessionSource,
     SessionWindow,
-    TaskAlreadyRunningError,
-    TaskNotRunningError,
-    TaskRun,
-    TaskState,
     TrackerStateMissingError,
     session_key,
 )
 
 __all__ = [
-    "ATTACHED_TASK_IDS_PAYLOAD_KEY",
     "LocalStateClient",
     "LocalConfig",
     "ModelIdsNotWritableError",
     "OdooConnectionSettings",
-    "TaskState",
-    "TaskRun",
     "EventRecord",
-    "SessionSource",
     "SessionWindow",
     "session_key",
     "SCHEMA_DDL",
@@ -49,8 +38,5 @@ __all__ = [
     "create_schema",
     "current_repo_label",
     "tracker_db_path",
-    "TaskAlreadyRunningError",
-    "TaskNotRunningError",
-    "InvalidStateTransitionError",
     "TrackerStateMissingError",
 ]

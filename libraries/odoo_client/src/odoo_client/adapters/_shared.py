@@ -1,10 +1,8 @@
 """Cross-system helpers shared by the external-sync adapter packages (#718).
 
-Extracted from :mod:`odoo_client.adapters.external_sync` so the Google adapter
-package (:mod:`odoo_client.adapters.google.sync`) can use the task-id extraction
-and ISO parsing without importing the git/GitHub/Odoo puller module (which
-would be a cycle: ``external_sync`` re-exports the Google names for its
-frozen-test compatibility surface). ``external_sync`` re-imports every name
+Extracted from :mod:`odoo_client.adapters.external_sync` so the adapter
+packages can use the task-id extraction and ISO parsing without importing the
+git/GitHub/Odoo puller module (which would be a cycle). ``external_sync`` re-imports every name
 here into its own globals, so all historical ``external_sync._extract_task_ids``
 / ``external_sync._parse_iso_utc`` reads keep working.
 """
@@ -46,9 +44,8 @@ _TASK_ID_PATTERNS = (
     re.compile(rf"\((\d{{{_MIN_TASK_ID_DIGITS},}})\)"),
 )
 
-# The gated ``<id> title`` form above. Kept OUT of ``_TASK_ID_PATTERNS`` so the
-# calendar/gmail call sites (explicit-marker contract) can never grow it by
-# accident; :func:`_extract_task_ids` appends it LAST when ``allow_leading_id``
+# The gated ``<id> title`` form above. Kept OUT of ``_TASK_ID_PATTERNS`` so
+# explicit-marker call sites can never grow it by accident; :func:`_extract_task_ids` appends it LAST when ``allow_leading_id``
 # is set, preserving first-seen dedupe precedence.
 _LEADING_TASK_ID_PATTERN = re.compile(rf"^(\d{{{_MIN_TASK_ID_DIGITS},}})[\s#:-]")
 
@@ -62,7 +59,7 @@ def _extract_task_ids(
     client-side number or a PR cross-reference is never mistaken for a task id.
     ``allow_leading_id`` additionally admits the bare-leading-id form
     (:data:`_LEADING_TASK_ID_PATTERN`, issue #654); only the git/GitHub call
-    sites pass True — calendar/gmail attribution stays explicit-marker only.
+    sites pass True.
     """
     text = f"{subject} {branch}"
     patterns = _TASK_ID_PATTERNS

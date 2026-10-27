@@ -14,7 +14,7 @@ from unittest.mock import patch
 from odoo_client.client import OdooClient
 from odoo_client.commands.builtin.task_aging import TaskAgingCommand
 from odoo_client.transport.executor import OdooExecutor
-from odoo_client.utilities.odoo_helpers import get_task_aging
+from odoo_client.services.odoo_helpers import get_task_aging
 
 # Fixed reference "now" for deterministic day arithmetic.
 _NOW = datetime(2026, 7, 12, tzinfo=timezone.utc)
