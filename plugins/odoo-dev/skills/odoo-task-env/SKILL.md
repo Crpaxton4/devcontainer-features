@@ -54,7 +54,7 @@ failure, 0 with `--soft`.
 <base directory>/scripts/existing-work.sh <repo> <task_id> <default_branch> [--repo-path DIR]
 ```
 
-→ `{"state","branch","candidates":[...],"prs":[...],"gh_error","tracking":[...],"tracking_error"}`
+→ `{"state","branch","candidates":[...],"prs":[...],"gh_error"}`
 
 | state | Meaning | Do |
 |---|---|---|
@@ -65,8 +65,6 @@ failure, 0 with `--soft`.
 
 - Both branch forms are probed: `<id>#<slug>` and `<id>-<slug>`.
 - `"prs": []` with a non-null `gh_error` means unknown, not "no PRs". Say so.
-- `"tracking": []` with a non-null `tracking_error` means unknown, not "no session".
-  `tracking` comes from a best-effort `odoo-sdk cmd task_status`.
 
 ### 2. Worktree and branch
 
@@ -74,14 +72,13 @@ failure, 0 with `--soft`.
 <base directory>/scripts/worktree-ensure.sh <repo> <task_id> <slug> <base_branch> [<resume_branch>] [--repo-path DIR]
 ```
 
-→ `{"worktree","branch","status":"created"|"reused","tracking":"started"|"already_running"|"skipped"|"error"}`
+→ `{"worktree","branch","status":"created"|"reused"}`
 
 - Idempotent and flocked per repo. On reuse the branch is read from the worktree.
 - A new task branch has no upstream. The first `pr-open.sh` push sets it, so a bare
   `git push` cannot reach the base branch.
-- It is the single git writer for the task branch. It calls `odoo-sdk cmd start_task`
-  best-effort, and skips the call when `ODOO_UNATTENDED` is set; `tracking` says what
-  happened, and `skipped` or `error` is a warning, not a failure.
+- It is the single git writer for the task branch. No command creates a branch.
+- This skill records no time. Time comes from the dispatched job row and the hook events.
 - `<resume_branch>` is adopted as it stands: never reset, rebased or re-cut.
 
 ### 3. Stack
@@ -125,7 +122,6 @@ failure, 0 with `--soft`.
 | `REPOS_DIR` | resolved by `repos-dir.sh` | Non-standard repos tree. A tree with one clone declares itself with `touch <tree>/.odoo-repos-dir` |
 | `WORKTREE_SUBDIR` | `.worktrees` | Worktrees live elsewhere in this repo |
 | `ODOO_ACTIVE_REPOS` | empty | Protect in-use stacks from LRU eviction |
-| `ODOO_TASK_TRACKING` | `1` | `0` disables the best-effort tracking probes. A non-empty `ODOO_UNATTENDED` also skips `start_task` |
 | `MIN_FREE_GB` | `6` | A different RAM budget |
 | `ODOO_SHARED_COMPOSE` | `$REPOS_DIR/.devcontainer/shared/compose.yml` | The shared postgres and proxy stack lives elsewhere |
 | `ODOO_REPO_MAP_SCRIPTS` | the sibling map skill's `scripts/` | The map skill moved |
