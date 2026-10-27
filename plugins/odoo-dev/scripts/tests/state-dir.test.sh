@@ -30,7 +30,7 @@ mkdir -p "$STATE/tasks/30412" "$STATE/tasks/30413"
 # sd <args...> — state-dir.sh against the scratch state dir. Prints "rc|output".
 sd() {
   local out rc
-  out="$(env ODOO_DEV_STATE_DIR="$STATE" bash "$SD" "$@" 2>/dev/null)"; rc=$?
+  out="$(env ODOO_DEV_HOME="$STATE" bash "$SD" "$@" 2>/dev/null)"; rc=$?
   printf '%s|%s' "$rc" "$out"
 }
 
@@ -65,16 +65,16 @@ else bad "state-dir.sh: junk under the state dir: $junk"; fi
 
 # A malformed CLI call is a bug in the command file, not something a user typed, so
 # it is the one thing that still exits non-zero. The retired release mode is one.
-env ODOO_DEV_STATE_DIR="$STATE" bash "$SD" bogus >/dev/null 2>&1; rc=$?
+env ODOO_DEV_HOME="$STATE" bash "$SD" bogus >/dev/null 2>&1; rc=$?
 [ "$rc" -eq 2 ] && ok "state-dir.sh: an unknown mode is still a usage error" \
   || bad "state-dir.sh: unknown mode exited $rc, wanted 2"
-env ODOO_DEV_STATE_DIR="$STATE" bash "$SD" release --create -- release UAT main >/dev/null 2>&1; rc=$?
+env ODOO_DEV_HOME="$STATE" bash "$SD" release --create -- release UAT main >/dev/null 2>&1; rc=$?
 [ "$rc" -eq 2 ] && ok "state-dir.sh: the release mode is gone" \
   || bad "state-dir.sh: release mode exited $rc, wanted 2"
 
 # artifact.sh takes the same argument the same way, through the same sourced
 # helpers, so a chain never has to spell the state dir out twice.
-if env ODOO_DEV_STATE_DIR="$STATE" bash "$ART" list 30412 2>/dev/null \
+if env ODOO_DEV_HOME="$STATE" bash "$ART" list 30412 2>/dev/null \
      | grep -q "\"file\":\"$STATE/tasks/30412/task.json\""; then
   ok "artifact.sh: a bare task id resolves against the state dir"
 else
@@ -205,21 +205,19 @@ tmps="$(find "$A" -maxdepth 1 -name '.task.*.tmp' | wc -l | tr -d ' ')"
 [ "$tmps" = 0 ] && ok "artifact.sh: atomic writes leave no temp file" \
   || bad "artifact.sh: $tmps temp file(s) left in $A"
 
-# Host default (#1251): with ODOO_DEV_STATE_DIR unset, ~/.config/odoo-dev wins when it
-# exists (the directory the containers bind), else ~/.local/share/odoo-dev.
+# One rule: ${ODOO_DEV_HOME:-$HOME/.config/odoo-dev}, whether or not the directory
+# exists. The script never creates it.
 FAKE_HOME="$(mktemp -d)"
-got="$(env -u ODOO_DEV_STATE_DIR HOME="$FAKE_HOME" bash "$SD" 2>/dev/null)"
-[ "$got" = "$FAKE_HOME/.local/share/odoo-dev" ] \
-  && ok "state-dir.sh: unset env, no ~/.config/odoo-dev -> old default" \
-  || bad "state-dir.sh: old default — got [$got]"
-mkdir -p "$FAKE_HOME/.config/odoo-dev"
-got="$(env -u ODOO_DEV_STATE_DIR HOME="$FAKE_HOME" bash "$SD" 2>/dev/null)"
+got="$(env -u ODOO_DEV_HOME HOME="$FAKE_HOME" bash "$SD" 2>/dev/null)"
 [ "$got" = "$FAKE_HOME/.config/odoo-dev" ] \
-  && ok "state-dir.sh: unset env, ~/.config/odoo-dev present -> it wins" \
-  || bad "state-dir.sh: host default — got [$got]"
-got="$(env ODOO_DEV_STATE_DIR="$STATE" HOME="$FAKE_HOME" bash "$SD" 2>/dev/null)"
+  && ok "state-dir.sh: ODOO_DEV_HOME unset -> ~/.config/odoo-dev" \
+  || bad "state-dir.sh: default — got [$got]"
+[ ! -e "$FAKE_HOME/.config" ] \
+  && ok "state-dir.sh: resolving the default creates nothing" \
+  || bad "state-dir.sh: the default was created"
+got="$(env ODOO_DEV_HOME="$STATE" HOME="$FAKE_HOME" bash "$SD" 2>/dev/null)"
 [ "$got" = "$STATE" ] \
-  && ok "state-dir.sh: ODOO_DEV_STATE_DIR beats ~/.config/odoo-dev" \
+  && ok "state-dir.sh: ODOO_DEV_HOME overrides the default" \
   || bad "state-dir.sh: explicit env — got [$got]"
 rm -rf "$FAKE_HOME"
 

@@ -2,7 +2,7 @@
 # state-dir.sh — the one place that knows where odoo-dev keeps its state.
 #
 # Every command used to open with an inline `!`…`` preamble that expanded
-# ${ODOO_DEV_STATE_DIR:-$HOME/.local/share/odoo-dev} twice, validated the task id
+# the state dir path twice, validated the task id
 # with grep, created the directory with mkdir, and fell back with `||` — four
 # commands' worth of shell in one backtick. A worktree-isolated Claude Code session
 # refuses that: it cannot statically prove what a runtime-computed value inside an
@@ -14,16 +14,13 @@
 # literal path. This file is that script, and it is also the single definition of
 # the rules the rest of the plugin has to agree on:
 #
-#   * the state dir is $ODOO_DEV_STATE_DIR. When that is unset, a host uses
-#     $HOME/.config/odoo-dev if that directory exists (the Feature bind source, so host
-#     and containers read one repo map), else $HOME/.local/share/odoo-dev.
-#     In a devcontainer that variable is normally set for you: the personal-features
-#     Feature bind-mounts host ~/.config/odoo-dev at /usr/local/share/odoo-dev and
-#     points ODOO_DEV_STATE_DIR at it through containerEnv (#884), so state outlives
-#     a rebuild. The $HOME default is what a bare checkout outside that Feature gets,
-#     and inside a container it resolves to image storage a rebuild discards - which
-#     is why nothing in this plugin may hardcode the default a second time; every
-#     caller resolves it through here.
+#   * the state dir is ${ODOO_DEV_HOME:-$HOME/.config/odoo-dev} and nothing else.
+#     The devcontainer exports ODOO_DEV_HOME=/usr/local/share/odoo-dev, where the
+#     personal-features Feature bind-mounts the host ~/.config/odoo-dev. The host
+#     default is that same bind source, so host and containers read one repo map.
+#     Nothing in this plugin may restate the default; every caller resolves it
+#     through here. This script never creates the directory: `odoo-dev` creates it
+#     on first use and `odoo-dev doctor` reports it.
 #   * a task id is ^[0-9]+$ and nothing else, so a word of prose can never become a
 #     directory (see gate 18 in validate.sh, and the `tasks/Create` bug it exists for)
 #   * a task's artifacts live in <state>/tasks/<id>/ — one task.json (artifact.sh)
@@ -55,13 +52,7 @@
 
 # The state dir, with the documented default. No trailing slash, ever.
 odoo_dev_state_dir() {
-  if [ -n "${ODOO_DEV_STATE_DIR:-}" ]; then
-    printf '%s' "$ODOO_DEV_STATE_DIR"
-  elif [ -d "${HOME:-}/.config/odoo-dev" ]; then
-    printf '%s' "${HOME:-}/.config/odoo-dev"
-  else
-    printf '%s' "${HOME:-}/.local/share/odoo-dev"
-  fi
+  printf '%s' "${ODOO_DEV_HOME:-$HOME/.config/odoo-dev}"
 }
 
 # The disambiguation rule for every <artifacts_dir> argument in this plugin: a bare

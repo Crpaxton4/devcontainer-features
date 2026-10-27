@@ -1,72 +1,43 @@
 #!/usr/bin/env bash
 # project-resolve.sh — one Odoo project (or repo folder) -> everything the rest
-# of the delivery suite needs to act on it.
+# of the delivery suite needs to act on it. A thin wrapper over
+# `odoo-dev repo-map resolve`.
 #
-# Usage: project-resolve.sh "<project name>|<repo folder>" [--next-after <branch>] [--series NN.0]
+# Usage: project-resolve.sh "<project name|alias|repo folder>" [--next-after <branch>] [--series NN.0]
 #
-# --series NN.0 fills upgrade_branch: the entry's upgrade_branch[NN.0] when set,
-# else default_branch. Without --series the key is null. A value that is not
-# NN.0 exits 2.
-#
-# Accepting a repo folder as well as a project name is deliberate: half the
-# callers start from an Odoo task (project name) and half from a checkout the
-# user is standing in (folder). When a folder maps to SEVERAL projects — one
-# repo commonly carries both the delivery project and its upgrade project —
-# that is reported as ambiguous (exit 6) rather than resolved to the first hit,
-# because the two entries can disagree on odoo_version and on the branch chain.
-# Ambiguity is keyed on the `repo` field, which is what the lookup matched; a
-# shared repo_path is not ambiguity here and is rejected by repo-map.sh at write
-# time instead.
+# The query is tried as a project name, an alias, then a repo folder name. A
+# folder that maps to SEVERAL projects is ambiguous (exit 6): name the project.
 #
 # --next-after <branch> answers "where does work on <branch> get promoted to",
-# reading branch_flow. It refuses to answer from an unconfirmed flow only when
-# the answer would be production (the last element): being wrong about a staging
-# hop costs a re-run, being wrong about production costs a customer.
+# from branch_flow. <branch> is an element of the flow. For the first hop out of
+# a per-task branch pass `task`, the first element of a flow that starts from a
+# per-task branch. next_env is null at the production branch (the last element).
 #
-# The argument is an ELEMENT OF THE CHAIN, never an arbitrary branch. For the
-# first hop — out of a per-task branch and into whatever that task PR targets —
-# pass the reserved token :task, which is what a chain records at index 0 when
-# task work starts from a branch cut fresh per task rather than from a shared
-# one. That answers the first hop with the same arithmetic as every other hop,
-# and it is why the token exists: a chain beginning with an ordinary name (the
-# old "dev" convention) made the first hop a question about a branch that was on
-# no remote. A branch that is not on the chain is still an error rather than an
-# assumed task branch: silently treating an unrecognised name as "must be a task
-# branch" would answer a typo'd environment name with default_branch.
+# --series NN.0 fills upgrade_branch: the entry's upgrade_branch[NN.0] when set,
+# else the last element of the flow. Without --series the key is null.
 #
-# Last stdout line: {"project","repo","repo_path","default_branch","odoo_version",
-#   "branch_flow":[],"flow_confirmed","remote","next_env","at_production",
+# Last stdout line: {"project","repo","repo_root","origin","odoo_version",
+#   "branch_flow":[],"base_branch","upgrade_branch","next_env","at_production",
 #   "release_assignee","release_reviewer"}
 #
-# release_assignee and release_reviewer are null when the project has recorded
-# none. Null means unanswered and the caller has to ask; it is not a licence to
-# infer one from commit authorship.
+# branch_flow is the effective flow: the entry's own, else the map defaults.
+# base_branch is what a task branch is cut from and its PR targets: the first
+# element after `task` that exists on origin (a missing branch is skipped).
+# It is null when there is no checkout or no such branch.
+# repo_root is the checkout on this machine, or null. release_assignee and
+# release_reviewer fall back to the map defaults and are null when neither is
+# set. Null means unanswered; the caller has to ask.
 #
-# repo_path is the checkout when one is present on this machine, and null when
-# there is none. An absolute repo_path recorded on the map entry wins over
-# $REPOS_DIR/$repo: the flat tree is a convention, and a bind mount whose folder
-# name cannot match the repo field (the Odoo devcontainer's /mnt/extra-addons)
-# has no tree to resolve. The origin sniff below reads that same path, so a
-# project pinned this way gets its remote filled in rather than left null.
-#
-# Exit codes: 0 ok | 2 usage | 3 unmapped | 4 flow missing/unusable | 6 ambiguous
-#
-# 3 and 6 were one code until #995, and the two have opposite remedies: an
-# unmapped project needs an entry written (project-bootstrap.sh derives what is
-# mechanical and `repo-map.sh add` records it), while an ambiguous one needs a
-# human to pick between entries that already exist. A caller given one code for
-# both could only ever report the wrong one, which is what made the release
-# route describe a missing project as an ambiguity listing zero candidates.
-# 3 keeps the unmapped meaning so it still agrees with `repo-map.sh get`, whose
-# exit 3 is "project unmapped". 5 is skipped on purpose: release-manifest.sh in
-# the same skill family already spends it on "nothing to release".
+# Exit codes: 0 ok | 2 usage | 3 unmapped | 4 --next-after cannot answer | 6 ambiguous
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$SCRIPT_DIR/../../.." && pwd)}"
-MAP="${REPO_MAP_FILE:-$("$PLUGIN_ROOT/scripts/state-dir.sh")/repo-map.json}"
+JSON_GET="$PLUGIN_ROOT/scripts/json-get.sh"
 
-[ $# -ge 1 ] || { echo "usage: project-resolve.sh \"<project|repo>\" [--next-after <branch>] [--series NN.0]" >&2; exit 2; }
+usage() { echo "usage: project-resolve.sh \"<project|repo>\" [--next-after <branch>] [--series NN.0]" >&2; exit 2; }
+
+[ $# -ge 1 ] || usage
 key="$1"; shift
 next_after=""; series=""
 while [ $# -gt 0 ]; do
@@ -83,142 +54,83 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-bash "$SCRIPT_DIR/repo-map.sh" validate >/dev/null
-
-# Resolved lazily and non-fatally: metadata is still worth returning on a machine
-# where the repos tree is not present (planning, estimating, reviewing a map).
+# A missing repos tree is not an error: the metadata is still worth returning.
 repos_dir="$(REPOS_DIR="${REPOS_DIR:-}" "$SCRIPT_DIR/repos-dir.sh" --raw 2>/dev/null || true)"
+args=(repo-map resolve "$key" --json)
+[ -z "$repos_dir" ] || args+=(--repos-dir "$repos_dir")
 
-entry_json="$(node --input-type=module -e '
-  import { readFileSync } from "fs";
-  const [file, key] = process.argv.slice(1);
-  const data = JSON.parse(readFileSync(file, "utf8"));
-  const projects = data.projects;
-  if (projects[key]) { console.log(JSON.stringify({ project: key, alias_of: null, ...projects[key] })); process.exit(0); }
-  const lower = key.toLowerCase();
-  // An alias is a name for an entry, not an entry: it answers as that entry with
-  // `project` as typed. It is tried before the repo-folder match, and because
-  // aliases are not entries the exit-6 ambiguity below is untouched by them.
-  const byAlias = (match) => Object.entries(projects).find(([, e]) => (e.aliases || []).some(match));
-  const hit = byAlias((a) => a === key) || byAlias((a) => a.toLowerCase() === lower);
-  if (hit) { console.log(JSON.stringify({ ...hit[1], project: key, alias_of: hit[0] })); process.exit(0); }
-  const byRepo = Object.entries(projects).filter(([, e]) => (e.repo || "").toLowerCase() === lower);
-  if (byRepo.length === 1) {
-    const [name, entry] = byRepo[0];
-    console.log(JSON.stringify({ project: name, alias_of: null, ...entry }));
-    process.exit(0);
-  }
-  if (byRepo.length > 1) {
-    // Exit 6, not 3: the entries exist and a human has to choose between them.
-    // Ambiguity keys on `repo`, never on repo_path — two projects legitimately
-    // share one checkout, and they are told apart by the folder name they were
-    // looked up by. A colliding repo_path is a separate defect, rejected by
-    // repo-map.sh at `add`/`set --repo-path` time rather than here.
-    console.error("ambiguous: repo \"" + key + "\" maps to several projects — name the project instead:\n  " +
-      byRepo.map(([n]) => n).join("\n  "));
-    process.exit(6);
-  }
-  // Exit 3, unmapped. Mechanically derivable fields can be recorded without a
-  // human: skills/odoo-repo-map/scripts/project-bootstrap.sh "<checkout>".
-  console.error("unmapped project or repo: " + key + "\nknown projects:\n  " + Object.keys(projects).join("\n  ") +
-    "\nStop and ask the user; never guess a repo for an unknown project." +
-    "\nTo record what is mechanically derivable about a checkout first: project-bootstrap.sh \"<checkout path>\"");
-  process.exit(3);
-' -- "$MAP" "$key")"
+rc=0
+resolved="$(odoo-dev "${args[@]}")" || rc=$?
+[ "$rc" -eq 0 ] || [ "$rc" -eq 3 ] || exit "$rc"
 
-node --input-type=module -e '
-  import { existsSync } from "fs";
-  import { execFileSync } from "child_process";
-  const [entryRaw, reposDir, nextAfter, series] = process.argv.slice(1);
-  const entry = JSON.parse(entryRaw);
-  // branch_flow index 0 when task work starts from a per-task branch. Spelled
-  // with a colon, which git forbids in a ref name, so it can never be a branch.
-  const TASK_BRANCH = ":task";
-  const flow = Array.isArray(entry.branch_flow) ? entry.branch_flow : [];
-  const confirmed = entry.flow_confirmed === true;
+while IFS= read -r warning; do
+  case "$warning" in
+    ambiguous:*)
+      echo "$warning" >&2
+      exit 6 ;;
+    "no repo-map entry"*) ;;
+    *) echo "project-resolve.sh: $warning" >&2 ;;
+  esac
+done < <("$JSON_GET" -l d.warnings <<<"$resolved")
 
-  // An explicit repo_path is where the checkout actually is, so it wins outright
-  // over the $REPOS_DIR/$repo convention — including on machines where no repos
-  // tree resolves at all and reposDir is empty.
-  const repoPath = entry.repo_path || (reposDir ? `${reposDir}/${entry.repo}` : null);
-  let repoPresent = Boolean(repoPath) && existsSync(`${repoPath}/.git`);
+if [ "$rc" -eq 3 ]; then
+  echo "unmapped project or repo: $key" >&2
+  echo "known projects:" >&2
+  odoo-dev repo-map list --json | "$JSON_GET" -l 'd.map((p) => "  " + p.name)' >&2
+  echo "Stop and ask the user; never guess a repo for an unknown project." >&2
+  echo "To record what is mechanically derivable about a checkout first: project-bootstrap.sh \"<checkout path>\"" >&2
+  exit 3
+fi
 
-  // The origin of the checkout as owner/repo. stderr is ignored rather than inherited:
-  // a checkout with no origin — or a repo_path that is not a git repo at all —
-  // means a null origin, not a line of git noise beside the JSON this script prints.
-  let origin = null;
-  if (repoPresent) {
-    try {
-      const url = execFileSync("git", ["-C", repoPath, "remote", "get-url", "origin"],
-        { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
-      const m = url.replace(/\.git$/, "").match(/[:/]([^/:]+\/[^/]+)$/);
-      if (m) origin = m[1];
-    } catch { /* no origin — stays null */ }
-  }
+defaults="$(odoo-dev repo-map defaults --json)"
+mapfile -t flow < <("$JSON_GET" -l 'd.project.branch_flow.length ? d.project.branch_flow : JSON.parse(a.defaults).branch_flow' defaults="$defaults" <<<"$resolved")
 
-  // A pinned repo_path may be a shared mount holding the checkout of another repo.
-  // It counts only when the checkout is the repo of this entry: origin equals
-  // the remote of the entry, or (no remote recorded) the origin repo name equals the repo field.
-  // A checkout with no origin cannot be told apart, so it is trusted as before.
-  if (repoPresent && entry.repo_path && origin) {
-    const expected = entry.remote || entry.repo;
-    const matches = entry.remote ? origin === entry.remote : origin.split("/")[1] === entry.repo;
-    if (!matches) {
-      console.error(`project-resolve.sh: ${entry.project}: ${repoPath} is checked out from ${origin}, not ${expected} — repo_path ignored`);
-      repoPresent = false;
-    }
-  }
+# base_branch: the first element after `task` that exists on origin. A missing
+# branch is skipped. Null without a checkout, or when no element exists there.
+base_branch=""
+repo_root="$("$JSON_GET" d.repo_root <<<"$resolved")"
+if [ -n "$repo_root" ]; then
+  for branch in "${flow[@]}"; do
+    [ "$branch" != "task" ] || continue
+    if git -C "$repo_root" ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
+      base_branch="$branch"
+      break
+    fi
+  done
+fi
 
-  // Map first, git second: the map is what a human vouched for, and a checkout
-  // can sit on a fork or a stale remote. Gated on repoPresent, so pinning
-  // repo_path is what makes this fire where no tree resolves.
-  const remote = entry.remote || (repoPresent ? origin : null);
+next_env=""; at_production=""
+if [ -n "$next_after" ]; then
+  index=-1
+  for i in "${!flow[@]}"; do
+    [ "${flow[$i]}" = "$next_after" ] && { index="$i"; break; }
+  done
+  if [ "$index" -eq -1 ]; then
+    hint=""
+    [ "${flow[0]}" != "task" ] || hint=" — for the first hop out of a per-task branch pass: --next-after task"
+    echo "branch \"$next_after\" is not in branch_flow [${flow[*]}] for \"$key\"$hint" >&2
+    exit 4
+  fi
+  if [ "$index" -eq $((${#flow[@]} - 1)) ]; then
+    at_production=true
+  else
+    at_production=false
+    next_env="${flow[$((index + 1))]}"
+  fi
+fi
 
-  let nextEnv = null;
-  let atProduction = null;
-  if (nextAfter) {
-    if (!flow.length) {
-      console.error(`no branch_flow recorded for "${entry.project}" — confirm the environment chain with the user, then: repo-map.sh set-flow "${entry.project}" "${TASK_BRANCH},UAT,main" --flow-confirmed`);
-      process.exit(4);
-    }
-    const i = flow.indexOf(nextAfter);
-    if (i === -1) {
-      // A task branch is never an element of the chain: the chain names shared
-      // environments, plus the one reserved token standing in for whichever
-      // branch this task happens to be on. Naming it is what makes the first hop
-      // answerable without assuming an unrecognised name must be a task branch.
-      const hint = flow[0] === TASK_BRANCH
-        ? ` — for the first hop out of a per-task branch pass the reserved placeholder: --next-after ${TASK_BRANCH}`
-        : "";
-      console.error(`branch "${nextAfter}" is not in branch_flow [${flow.join(", ")}] for "${entry.project}"${hint}`);
-      process.exit(4);
-    }
-    atProduction = i === flow.length - 1;
-    nextEnv = atProduction ? null : flow[i + 1];
-    // An unconfirmed chain is a guess parsed out of prose. Guessing a staging hop
-    // wastes a run; guessing production deploys to a customer.
-    if (!confirmed && nextEnv === flow[flow.length - 1]) {
-      console.error(`branch_flow for "${entry.project}" is unconfirmed and the next hop (${nextEnv}) is the production element — confirm with the user first: repo-map.sh set-flow "${entry.project}" "${flow.join(",")}" --flow-confirmed`);
-      process.exit(4);
-    }
-  }
-
-  console.log(JSON.stringify({
-    project: entry.project,
-    alias_of: entry.alias_of ?? null,
-    repo: entry.repo,
-    repo_path: repoPresent ? repoPath : null,
-    default_branch: entry.default_branch ?? null,
-    // The base an upgrade to --series is cut from and its PR targets: the recorded
-    // branch for that series, else default_branch so a caller always has a base.
-    upgrade_branch: series ? (entry.upgrade_branch?.[series] ?? entry.default_branch ?? null) : null,
-    odoo_version: entry.odoo_version ?? null,
-    branch_flow: flow,
-    flow_confirmed: confirmed,
-    remote,
-    next_env: nextEnv,
-    at_production: atProduction,
-    release_assignee: entry.release_assignee ?? null,
-    release_reviewer: entry.release_reviewer ?? null,
-  }));
-' -- "$entry_json" "$repos_dir" "$next_after" "$series"
+"$JSON_GET" '({
+  project: d.project.name,
+  repo: d.project.repo,
+  repo_root: d.repo_root,
+  origin: d.origin,
+  odoo_version: d.project.odoo_version || null,
+  branch_flow: a.flow.split(","),
+  base_branch: a.base_branch || null,
+  upgrade_branch: a.series ? d.project.upgrade_branch[a.series] || a.flow.split(",").at(-1) : null,
+  next_env: a.next_env || null,
+  at_production: a.at_production ? a.at_production === "true" : null,
+  release_assignee: d.project.release_assignee || JSON.parse(a.defaults).release_assignee || null,
+  release_reviewer: d.project.release_reviewer || JSON.parse(a.defaults).release_reviewer || null,
+})' defaults="$defaults" series="$series" next_env="$next_env" at_production="$at_production" \
+  base_branch="$base_branch" flow="$(IFS=,; echo "${flow[*]}")" <<<"$resolved"
