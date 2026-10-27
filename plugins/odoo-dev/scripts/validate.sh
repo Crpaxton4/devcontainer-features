@@ -441,6 +441,21 @@ while IFS= read -r f; do
 done < <(find "$ROOT" -name '*.sh' -type f | sort)
 [ "$synbad" -eq 0 ] && ok "every .sh parses"
 
+# --- 13b. hooks are wrappers over hooks/lib/*.js -----------------------------------
+# A hook answers in well under 100 ms, so it runs `node <file>` once: no inline
+# `node -e` program in a hook, and no Python (the interpreter alone costs more than
+# the budget). The logic lives in hooks/lib/*.js.
+gate "no inline node -e in hooks"
+inline="$(grep -rn "node -e" "$ROOT/hooks" 2>/dev/null || true)"
+if [ -z "$inline" ]; then ok "hooks hold no inline node program"; else
+  bad "inline node -e in a hook; move it to hooks/lib/*.js"; echo "$inline" | sed "s|^$ROOT/||" | sed 's/^/       /'
+fi
+gate "hooks call no python"
+py="$(grep -rnE "python3?\b" "$ROOT/hooks" 2>/dev/null || true)"
+if [ -z "$py" ]; then ok "hooks name no python"; else
+  bad "python in a hook"; echo "$py" | sed "s|^$ROOT/||" | sed 's/^/       /'
+fi
+
 # --- 14. no bare artifact.sh invocation -------------------------------------------
 # Every artifact write in the chain was once `command not found`: the bodies said
 # `artifact.sh put ...` and nothing puts scripts/ on PATH. An invocation is a line
