@@ -34,7 +34,7 @@ from odoo_tui.triage import (
     triage_body_lines,
 )
 from odoo_tui.window import DateWindow
-from tests.support import make_event_store
+from ..support import make_event_store
 
 UTC = timezone.utc
 

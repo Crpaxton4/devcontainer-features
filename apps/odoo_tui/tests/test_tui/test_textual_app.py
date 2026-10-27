@@ -26,7 +26,7 @@ from odoo_tui.textual_app import (
 )
 from odoo_tui.window import DateWindow
 from odoo_dev_core.sessionization.stats import compute_stats
-from tests.test_tui._fake import (
+from ..test_tui._fake import (
     FakeCommand,
     FakeRegistry,
     build_fake_deps,

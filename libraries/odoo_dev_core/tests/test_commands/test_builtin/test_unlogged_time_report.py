@@ -19,7 +19,7 @@ from odoo_mcp.tools.atomic import make_unlogged_time_report_tool
 from odoo_dev_data.config import LocalConfig
 from odoo_dev_data.events import EventRecord
 from odoo_client.transport.errors import OdooTransportError
-from tests.support import make_event_store
+from ...support import make_event_store
 
 UTC = timezone.utc
 _HELPER = "odoo_dev_core.commands.builtin.unlogged_time_report.unlogged_time_report"

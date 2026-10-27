@@ -32,7 +32,7 @@ from odoo_dev_core.billing.upload import (
     _round_to_step,
     upload_sessions,
 )
-from tests.support import make_event_store
+from ..support import make_event_store
 
 UTC = timezone.utc
 

@@ -18,7 +18,7 @@ from odoo_dev_core.sessionization import (
 )
 from odoo_dev_data.events import EventRecord
 from odoo_dev_core.billing.upload import _billable_hours
-from tests.support import make_event_store
+from ..support import make_event_store
 
 UTC = timezone.utc
 

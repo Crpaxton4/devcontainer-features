@@ -23,7 +23,7 @@ from odoo_dev_core.billing.timesheet import (
     resolve_employee_id,
     sweep_orphaned_uploads,
 )
-from tests.support import make_event_store
+from ..support import make_event_store
 
 UTC = timezone.utc
 

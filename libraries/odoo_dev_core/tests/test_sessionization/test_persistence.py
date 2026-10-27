@@ -9,7 +9,7 @@ from odoo_dev_core.sessionization.persistence import (
 )
 from odoo_dev_core.sessionization import EventType, RawEvent
 from odoo_dev_data.events import EventRecord, EventStore
-from tests.support import make_event_store
+from ..support import make_event_store
 
 UTC = timezone.utc
 

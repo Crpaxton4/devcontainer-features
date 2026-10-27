@@ -15,7 +15,7 @@ from odoo_dev_core.commands.builtin.task_note import TaskNoteCommand
 from odoo_dev_core.commands.builtin.task_question import TaskQuestionCommand
 from odoo_dev_core.commands.command import MAX_CHATTER_BODY_CHARS
 from odoo_dev_data.events import EventStore as TaskStateDB
-from tests.support import make_event_store
+from ...support import make_event_store
 
 _NOTE = "odoo_dev_core.commands.builtin.task_note"
 _QUESTION = "odoo_dev_core.commands.builtin.task_question"

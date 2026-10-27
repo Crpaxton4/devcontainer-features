@@ -28,7 +28,7 @@ from odoo_dev_core.commands.dispatch_telemetry import (
 )
 from odoo_client.errors import OdooError
 from odoo_dev_data.events import EventStore
-from tests.support import make_event_store
+from ..support import make_event_store
 
 BUILD_REGISTRY = "odoo_cli.__main__._build_registry"
 ASSERT_GUARD = "odoo_cli.__main__.assert_configured"

@@ -22,7 +22,7 @@ from odoo_dev_core.commands.log_event import (
     normalize_task_ids,
     task_ids_from_branch,
 )
-from tests.support import make_event_store
+from ..support import make_event_store
 
 #: Patch targets for the two best-effort git lookups the command performs. Every
 #: test that is not specifically about provenance stubs both, so the suite never

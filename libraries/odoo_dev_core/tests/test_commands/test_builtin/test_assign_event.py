@@ -13,7 +13,7 @@ from unittest.mock import MagicMock
 
 from odoo_dev_core.commands.builtin.assign_event import AssignEventCommand
 from odoo_dev_data.events import EventRecord, EventStore
-from tests.support import make_event_store
+from ...support import make_event_store
 
 UTC = timezone.utc
 

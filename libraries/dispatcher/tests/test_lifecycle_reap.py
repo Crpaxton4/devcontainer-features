@@ -14,7 +14,7 @@ from dispatcher import collect, lifecycle, queue
 from dispatcher.lifecycle import Completed, Shell
 from dispatcher.reap import host_worktree, reap
 from dispatcher.settings import DEFAULT_ENTRY
-from support import GOOD, FakeShell, stream, write_task_record
+from .support import GOOD, FakeShell, stream, write_task_record
 
 
 def test_exec_command_line_is_section_eight_exactly(settings):

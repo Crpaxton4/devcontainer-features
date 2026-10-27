@@ -25,7 +25,7 @@ from odoo_tui.app import (
 from odoo_tui.evidence import STRONG, WEAK, Overlap, ReviewCard
 from odoo_tui.review import review_body_lines
 from odoo_tui.window import DateWindow
-from tests.support import make_event_store
+from ..support import make_event_store
 
 UTC = timezone.utc
 

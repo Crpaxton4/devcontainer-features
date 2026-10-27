@@ -10,7 +10,7 @@ from odoo_tui.export import (
     export_csv,
     export_markdown,
 )
-from tests.support import make_event_store
+from ..support import make_event_store
 
 UTC = timezone.utc
 

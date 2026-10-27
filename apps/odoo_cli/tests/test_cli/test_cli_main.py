@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 
 import odoo_cli.__main__ as cli
 from odoo_dev_data.events import EventStore as TaskStateDB
-from tests.support import make_event_store
+from ..support import make_event_store
 
 ASSERT_GUARD = "odoo_cli.__main__.assert_configured"
 

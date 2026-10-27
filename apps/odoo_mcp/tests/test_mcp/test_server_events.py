@@ -18,7 +18,7 @@ from odoo_dev_core.commands.builtin import BUILTIN_COMMANDS
 from odoo_mcp import server as server_mod
 from odoo_mcp.server import READ_TASK_IDS_PAYLOAD_KEY, OdooMCPServer
 from odoo_dev_data.events import EventStore
-from tests.support import make_event_store
+from ..support import make_event_store
 
 #: Patch targets for the best-effort git lookups ``LogEventCommand`` performs
 #: when a caller leaves ``repo``/``branch`` unstated (#509).

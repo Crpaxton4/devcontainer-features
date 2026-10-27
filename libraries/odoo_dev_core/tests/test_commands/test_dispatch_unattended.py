@@ -9,7 +9,7 @@ from unittest.mock import Mock, patch
 import pytest
 
 from odoo_dev_core.commands.dispatch_telemetry import _is_dispatched_run
-from tests.support import make_event_store
+from ..support import make_event_store
 
 
 class TestAgentEmission:

@@ -17,7 +17,7 @@ from dispatcher.gates import MemoryReadError
 from dispatcher.gates import AdmissionGate
 from dispatcher.lifecycle import Completed
 from dispatcher.lock import DispatcherLock
-from support import GOOD, FakeProc, FakeShell, stream, write_task_record
+from .support import GOOD, FakeProc, FakeShell, stream, write_task_record
 
 
 @pytest.fixture

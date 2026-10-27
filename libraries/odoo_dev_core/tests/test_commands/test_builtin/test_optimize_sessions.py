@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 from odoo_dev_core.commands.builtin import OptimizeSessionsCommand
 from odoo_dev_core.commands.builtin.optimize_sessions import _build_config, _parse_date
 from odoo_dev_data.events import EventRecord, EventStore
-from tests.support import make_event_store
+from ...support import make_event_store
 
 UTC = timezone.utc
 

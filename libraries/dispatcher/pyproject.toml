@@ -27,11 +27,6 @@ dispatch = "dispatcher.cli:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-addopts = "--import-mode=importlib"
-pythonpath = ["tests"]
-
 [tool.black]
 target-version = ["py311"]
 

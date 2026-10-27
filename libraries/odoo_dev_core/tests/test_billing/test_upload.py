@@ -24,7 +24,7 @@ from odoo_dev_core.billing.upload import (
     _derived_description,
     _numeric_task_id,
 )
-from tests.support import make_event_store
+from ..support import make_event_store
 
 _MOD = "odoo_dev_core.billing.upload"
 _RECONCILE = f"{_MOD}.reconcile_session"

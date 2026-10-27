@@ -18,7 +18,7 @@ from unittest.mock import MagicMock, patch
 
 import odoo_cli.__main__ as cli
 from odoo_dev_data.events import EventRecord, EventStore
-from tests.support import make_event_store
+from ..support import make_event_store
 
 _MOD = "odoo_cli.__main__"
 UTC = timezone.utc

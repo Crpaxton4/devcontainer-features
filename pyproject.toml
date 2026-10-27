@@ -30,6 +30,16 @@ dev = [
     "pytest>=9.1.1",
 ]
 
+[tool.pytest.ini_options]
+# One pytest config for the workspace: rootdir is this directory, every test
+# module gets a unique dotted name (importlib mode), and test helpers import
+# each other relatively (`from .support import ...`).
+testpaths = ["libraries", "apps"]
+addopts = "--import-mode=importlib"
+pythonpath = ["."]
+consider_namespace_packages = true
+norecursedirs = ["examples", "docs", "build", "dist", "reports", "node_modules", ".venv", ".*"]
+
 [tool.black]
 target-version = ["py310"]
 

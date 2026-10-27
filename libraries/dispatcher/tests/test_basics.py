@@ -18,7 +18,7 @@ from dispatcher.settings import (
     SettingsError,
     normalize_project,
 )
-from support import GOOD
+from .support import GOOD
 
 # -- lock ---------------------------------------------------------------
 

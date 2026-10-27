@@ -9,8 +9,8 @@ from dispatcher.store.jobs import JobState, JobStore
 
 from dispatcher import cli, lifecycle
 from dispatcher.lock import DispatcherLock
-from support import GOOD, FakeProc, stream
-from test_engine_cli import world  # noqa: F401  (fixture)
+from .support import GOOD, FakeProc, stream
+from .test_engine_cli import world  # noqa: F401  (fixture)
 
 
 @pytest.fixture

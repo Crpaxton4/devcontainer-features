@@ -26,10 +26,5 @@ where = ["src"]
 [tool.setuptools.package-data]
 webui = ["templates/*.html", "static/*"]
 
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-addopts = "--import-mode=importlib"
-pythonpath = ["tests"]
-
 [tool.black]
 target-version = ["py311"]
