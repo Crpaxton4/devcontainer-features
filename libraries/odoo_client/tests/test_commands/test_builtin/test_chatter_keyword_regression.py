@@ -15,18 +15,16 @@ here as a ``TypeError`` raised from the fake executor — proving every caller,
 not just the helper in isolation, drives ``message_post`` with keyword options.
 """
 
-import tempfile
 import unittest
-from pathlib import Path
 from typing import Any
 
 from odoo_client.client import OdooClient
 from odoo_client.commands.builtin.task_note import TaskNoteCommand
 from odoo_client.commands.command import MAX_CHATTER_BODY_CHARS
 from odoo_client.commands.builtin.task_question import TaskQuestionCommand
-from odoo_client.state import LocalStateClient as TaskStateDB
+from odoo_dev_data.events import EventStore as TaskStateDB
 from odoo_client.transport.executor import OdooExecutor
-from tests.support import make_state_db
+from tests.support import make_event_store
 
 
 class _KeywordOnlyMessagePostExecutor(OdooExecutor):
@@ -84,9 +82,7 @@ class _KeywordOnlyMessagePostExecutor(OdooExecutor):
 
 
 def _tmp_db() -> TaskStateDB:
-    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
-    tmp.close()
-    return make_state_db(Path(tmp.name))
+    return make_event_store()
 
 
 def _keyword_client() -> tuple[OdooClient, _KeywordOnlyMessagePostExecutor]:

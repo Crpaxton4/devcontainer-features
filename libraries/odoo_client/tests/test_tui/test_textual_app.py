@@ -11,7 +11,7 @@ import unittest
 from datetime import date, datetime
 from unittest.mock import patch
 
-from odoo_client.state import EventRecord
+from odoo_dev_data.events import EventRecord
 from odoo_client.tui.app import AppState
 from odoo_client.tui.textual_app import (
     MainScreen,
@@ -25,7 +25,7 @@ from odoo_client.tui.textual_app import (
     timeline_lines,
 )
 from odoo_client.tui.window import DateWindow
-from odoo_client.tracking.stats import compute_stats
+from odoo_client.sessionization.stats import compute_stats
 from tests.test_tui._fake import (
     FakeCommand,
     FakeRegistry,

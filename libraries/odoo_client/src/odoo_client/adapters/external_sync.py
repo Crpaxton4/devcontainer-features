@@ -15,7 +15,7 @@ carry their PR's real ``headRefName`` so branch-encoded task ids attribute.
 Every puller accepts optional inclusive ``start``/``end`` dates that override
 the rolling ``resync_window_days`` window (mirroring the upload command's range
 semantics), and is idempotent: each event carries a stable ``external_id``
-written through :meth:`LocalStateClient.add_event_dedup` (``INSERT OR IGNORE``
+written through :meth:`EventStore.add_event_dedup` (``INSERT OR IGNORE``
 against the partial unique index on ``events(external_id)``), so re-running
 inserts nothing the second time. The error-vs-skip contract (#652): a source
 whose tooling is entirely unusable (no git identity, zero repos, unauthenticated
@@ -35,7 +35,7 @@ until the adapter tests are next allowed to move.
 
 ``merge`` events are stored for audit only: a merge is a point-in-time release
 marker, not a work span, so it is the one ingested source excluded from derived
-sessions (see :data:`odoo_client.state.db._SESSION_SOURCE_PREDICATE`). Opening a
+sessions (see :data:`odoo_dev_data.events._SESSION_SOURCE_PREDICATE`). Opening a
 PR, by contrast, IS billable work — assembling and describing the change is at
 least a review's worth of effort — so each authored PR also mints a
 ``pr_opened`` event at ``createdAt`` (#656). Every non-merge source
@@ -67,9 +67,9 @@ from odoo_client.adapters._shared import (  # noqa: F401
     _parse_iso_utc,
 )
 
-from odoo_client.state import EventRecord, LocalConfig, LocalStateClient
-from odoo_client.state.config import _DEFAULT_RESYNC_WINDOW_DAYS
-from odoo_client.state.db import _derive_repo_label
+from odoo_dev_data.adapters.git import derive_repo_label
+from odoo_dev_data.config import BEHAVIOR_DEFAULTS, LocalConfig
+from odoo_dev_data.events import EventRecord, EventStore
 from odoo_client.transport.errors import OdooError
 
 # ASCII unit separator used to delimit git-log fields (never appears in text).
@@ -126,7 +126,7 @@ def _finalize_task_attribution(event: EventRecord, valid: Optional[set[str]]) ->
 
 
 def _store_pending(
-    state: LocalStateClient, pending: list[EventRecord], client: Any
+    state: EventStore, pending: list[EventRecord], client: Any
 ) -> list[EventRecord]:
     """Validate every pending event's ids in ONE batch, then store them deduped.
 
@@ -159,7 +159,7 @@ def _run_capture(cmd: list[str]) -> Optional[str]:
     return result.stdout.strip()
 
 
-def _current_repo_label(state: LocalStateClient) -> str:
+def _current_repo_label(state: EventStore) -> str:
     """Return the current repo's ``owner/repo`` label, or empty string.
 
     Prefers the identity persisted into the DB (``repo_label``, stamped per #331);
@@ -171,7 +171,7 @@ def _current_repo_label(state: LocalStateClient) -> str:
     if label:
         return label
     remote = _run_capture(["git", "remote", "get-url", "origin"])
-    return _derive_repo_label(remote) if remote else ""
+    return derive_repo_label(remote) if remote else ""
 
 
 def _parse_odoo_dt(value: str) -> datetime:
@@ -189,7 +189,9 @@ def _window_start(config: Optional[LocalConfig], now: Optional[datetime]) -> dat
     ``now`` defaults to the current UTC time and is injectable for deterministic
     tests.
     """
-    days = config.resync_window_days if config else _DEFAULT_RESYNC_WINDOW_DAYS
+    days = (
+        config.resync_window_days if config else BEHAVIOR_DEFAULTS["resync_window_days"]
+    )
     moment = now or datetime.now(timezone.utc)
     return moment - timedelta(days=days)
 
@@ -341,7 +343,7 @@ def _repo_label_for(root: Path) -> str:
     (empty when it has none).
     """
     remote = _run_capture(["git", "-C", str(root), "remote", "get-url", "origin"])
-    return _derive_repo_label(remote) if remote else ""
+    return derive_repo_label(remote) if remote else ""
 
 
 def _build_commit_event(line: str, label: str) -> Optional[EventRecord]:
@@ -391,7 +393,7 @@ def _repo_commit_events(
 
 
 def sync_git_log(
-    state: LocalStateClient,
+    state: EventStore,
     config: Optional[LocalConfig] = None,
     client: Any = None,
     *,
@@ -915,7 +917,7 @@ def _unattributed_reviews(inserted: list[EventRecord]) -> list[str]:
 
 
 def sync_github(
-    state: LocalStateClient,
+    state: EventStore,
     config: Optional[LocalConfig] = None,
     client: Any = None,
     *,
@@ -1124,7 +1126,7 @@ def _is_tracking_only_message(message: dict) -> bool:
     return bool(tracked) and not headline
 
 
-def _store_message(state: LocalStateClient, message: dict, label: str) -> int:
+def _store_message(state: EventStore, message: dict, label: str) -> int:
     """Store one chatter message as a ``chatter`` event; return 1 if inserted.
 
     A message with no timestamp (Odoo returns ``False`` for an empty datetime) is
@@ -1154,7 +1156,7 @@ def _store_message(state: LocalStateClient, message: dict, label: str) -> int:
 
 def sync_odoo_chatter(
     client: Any,
-    state: LocalStateClient,
+    state: EventStore,
     config: Optional[LocalConfig] = None,
     *,
     now: Optional[datetime] = None,

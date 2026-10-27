@@ -18,17 +18,11 @@ from unittest.mock import MagicMock, Mock, patch
 from odoo_client.commands.command_registry import Registry
 from odoo_client.mcp import server
 from odoo_client.mcp.server import OdooMCPServer, _error_boundary, _error_payload
-from odoo_client.state.models import TrackerStateMissingError
 from odoo_client.transport.errors import OdooError, OdooValidationError
 
 # Each caught type paired with the exact payload the boundary must produce.
 _CAUGHT_CASES = [
     (OdooError("odoo boom"), "OdooError", "odoo boom"),
-    (
-        TrackerStateMissingError("no tracker database at /x/tracker.db"),
-        "TrackerStateMissingError",
-        "no tracker database at /x/tracker.db",
-    ),
     (ValueError("bad input"), "ValueError", "bad input"),
 ]
 
@@ -141,16 +135,14 @@ class TestErrorBoundaryWiredIntoServer(unittest.TestCase):
             )
 
     def test_async_failing_tool_returns_structured_payload(self):
-        tool = _build_added(
-            "boom", _async_raiser(TrackerStateMissingError("no tracker database"))
-        )
+        tool = _build_added("boom", _async_raiser(OdooError("odoo unreachable")))
         with patch.dict("os.environ", {}, clear=True):
             self.assertEqual(
                 asyncio.run(tool.fn()),
                 {
                     "error": {
-                        "type": "TrackerStateMissingError",
-                        "message": "no tracker database",
+                        "type": "OdooError",
+                        "message": "odoo unreachable",
                     }
                 },
             )

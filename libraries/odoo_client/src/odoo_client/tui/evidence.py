@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Mapping, Sequence
 
-from odoo_client.tracking.models import EventRecord
+from odoo_dev_data.events import EventRecord
 
 STRONG = "STRONG"
 WEAK = "WEAK"

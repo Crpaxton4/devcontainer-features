@@ -21,9 +21,7 @@ from unittest.mock import patch
 
 import odoo_client.cli.__main__ as cli
 from odoo_client.commands.log_event import normalize_repo_label
-from odoo_client.state import LocalStateClient as TaskStateDB
-from odoo_client.state.db import tracker_db_path
-from tests.support import provision_schema
+from odoo_dev_data.events import EventStore as TaskStateDB
 
 
 def _run(argv: list[str]) -> None:
@@ -85,14 +83,12 @@ class TestLogEventRepoFlag(unittest.TestCase):
             check=True,
             capture_output=True,
         )
-        os.environ["ODOO_TASK_TRACKER_DIR"] = self._state
-        # The central DB is host-provisioned; the SDK never creates it.
-        provision_schema(tracker_db_path(self._state))
+        os.environ["ODOO_DEV_HOME"] = self._state
         os.chdir(self._repo)
 
     def tearDown(self) -> None:
         os.chdir(self._cwd)
-        os.environ.pop("ODOO_TASK_TRACKER_DIR", None)
+        os.environ.pop("ODOO_DEV_HOME", None)
         shutil.rmtree(self._state, ignore_errors=True)
         shutil.rmtree(self._repo, ignore_errors=True)
 

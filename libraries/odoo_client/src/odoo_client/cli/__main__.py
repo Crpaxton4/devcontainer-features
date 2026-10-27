@@ -40,12 +40,18 @@ from odoo_client.commands.log_event import (
 )
 
 # The composition root is the CLI's only below-core dependency (#716): the
-# concrete OdooClient / LocalConfig / LocalStateClient constructors are
+# concrete OdooClient / LocalConfig / EventStore constructors are
 # obtained from it rather than from the data layer, and every registry is
 # wired through ``bootstrap`` (via ``_build_registry`` below).
 from odoo_client._utils import declare_usage, record_usage
-from odoo_client.bootstrap import LocalConfig, OdooClient, assert_configured, bootstrap
-from odoo_client.bootstrap import LocalStateClient as TaskStateDB
+from odoo_client.bootstrap import (
+    LocalConfig,
+    OdooClient,
+    assert_configured,
+    bootstrap,
+    build_client,
+)
+from odoo_client.bootstrap import EventStore as TaskStateDB
 from odoo_client.commands import Command, LogEventCommand, Registry
 from odoo_client.commands.dispatch_telemetry import (
     _BOUNDARY_ERRORS,
@@ -53,7 +59,6 @@ from odoo_client.commands.dispatch_telemetry import (
     _error_payload,
     _is_dispatched_run,
 )
-from odoo_client.errors import TrackerStateMissingError
 from odoo_client.sessionization import EventType
 from odoo_client.billing.upload import upload_sessions
 
@@ -61,7 +66,7 @@ from odoo_client.billing.upload import upload_sessions
 def _assert_env() -> None:
     try:
         assert_configured()
-    except (TrackerStateMissingError, ValueError) as exc:
+    except ValueError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)
 
@@ -86,7 +91,7 @@ class _LazyOdooClient:
     def _resolve(self) -> OdooClient:
         """Build the real client on first use and cache it thereafter."""
         if self._client is None:
-            self._client = OdooClient()
+            self._client = build_client()
         return self._client
 
     @property
@@ -240,9 +245,10 @@ def _resync_odoo(
     """
     try:
         assert_configured()
-    except (TrackerStateMissingError, ValueError):
+    except ValueError:
         return {"skipped": "odoo sdk not configured"}
-    return sync_odoo_chatter(OdooClient(), db, LocalConfig.load(), start=start, end=end)
+    config = LocalConfig.load()
+    return sync_odoo_chatter(build_client(config), db, config, start=start, end=end)
 
 
 def _found_suffix(result: dict) -> str:
@@ -794,24 +800,15 @@ def _run_command(
     entry: tuple[Callable[..., Any], bool], args: argparse.Namespace
 ) -> None:
     handler, needs_odoo = entry
-    try:
-        if not needs_odoo:
-            handler(_Ctx(args, None, None, None, None))
-            return
-        _assert_env()
-        client = _LazyOdooClient()
-        db = TaskStateDB()
-        config = LocalConfig.load()
-        registry = _build_registry(client, state=db, config=config)
-        handler(_Ctx(args, registry, client, db, config))
-    except TrackerStateMissingError as exc:
-        # The central DB is host-provisioned and bind-mounted; the SDK never
-        # creates it (#369). Surface the single actionable error and fail hard
-        # (exit 1) rather than exiting 0 silently. The claude-event-hook
-        # backgrounds this CLI and swallows output by contract, so this loud
-        # failure is for interactive invocations.
-        print(f"Error: {exc}", file=sys.stderr)
-        sys.exit(1)
+    if not needs_odoo:
+        handler(_Ctx(args, None, None, None, None))
+        return
+    _assert_env()
+    client = _LazyOdooClient()
+    db = TaskStateDB()
+    config = LocalConfig.load()
+    registry = _build_registry(client, state=db, config=config)
+    handler(_Ctx(args, registry, client, db, config))
 
 
 if __name__ == "__main__":

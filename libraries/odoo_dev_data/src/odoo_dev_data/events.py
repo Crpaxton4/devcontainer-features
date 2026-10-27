@@ -277,7 +277,7 @@ _SESSION_UPLOAD_COLUMNS = (
 )
 
 
-def _normalize_utc_isoformat(ts: datetime) -> str:
+def normalize_utc_isoformat(ts: datetime) -> str:
     """Return ``ts`` as a uniform UTC isoformat string, used for stored values and bounds.
 
     The derived read path compares ``MIN/MAX(timestamp)`` and query bounds as
@@ -329,10 +329,10 @@ def _window_where(
     params: list[str] = []
     if start is not None:
         clauses.append("timestamp >= ?")
-        params.append(_normalize_utc_isoformat(start))
+        params.append(normalize_utc_isoformat(start))
     if end is not None:
         clauses.append("timestamp < ?")
-        params.append(_normalize_utc_isoformat(end))
+        params.append(normalize_utc_isoformat(end))
     where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
     return where, params
 
@@ -422,7 +422,7 @@ def _insert_event_row(conn: sqlite3.Connection, event: EventRecord) -> sqlite3.C
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             event.source,
-            _normalize_utc_isoformat(event.timestamp),
+            normalize_utc_isoformat(event.timestamp),
             json.dumps(event.task_ids),
             event.repo,
             event.pr_num,
@@ -570,10 +570,10 @@ class EventStore:
         params: list[str] = [str(task_id)]
         if start is not None:
             clauses.append("events.timestamp >= ?")
-            params.append(_normalize_utc_isoformat(start))
+            params.append(normalize_utc_isoformat(start))
         if end is not None:
             clauses.append("events.timestamp <= ?")
-            params.append(_normalize_utc_isoformat(end))
+            params.append(normalize_utc_isoformat(end))
         columns = ", ".join(f"events.{c}" for c in _EVENT_COLUMNS.split(", "))
         with self._read() as conn:
             rows = conn.execute(
@@ -660,10 +660,10 @@ class EventStore:
         params: dict[str, object] = {
             "agentless": AGENTLESS_REPO,
             "gap_secs": gap_secs,
-            "start": _normalize_utc_isoformat(start),
-            "end": _normalize_utc_isoformat(end),
-            "wstart": _normalize_utc_isoformat(_widen(start, -margin)),
-            "wend": _normalize_utc_isoformat(_widen(end, margin)),
+            "start": normalize_utc_isoformat(start),
+            "end": normalize_utc_isoformat(end),
+            "wstart": normalize_utc_isoformat(_widen(start, -margin)),
+            "wend": normalize_utc_isoformat(_widen(end, margin)),
         }
         extra = ""
         if task_id is not None:
@@ -767,9 +767,9 @@ class EventStore:
         """
         uploaded_at = datetime.now(timezone.utc).isoformat()
         started = (
-            _normalize_utc_isoformat(started_at) if started_at is not None else None
+            normalize_utc_isoformat(started_at) if started_at is not None else None
         )
-        ended = _normalize_utc_isoformat(ended_at) if ended_at is not None else None
+        ended = normalize_utc_isoformat(ended_at) if ended_at is not None else None
         with self._write() as conn:
             conn.execute(
                 "INSERT INTO session_uploads (session_key, timesheet_id, hours, "

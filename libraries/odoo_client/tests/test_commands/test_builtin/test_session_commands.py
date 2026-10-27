@@ -1,22 +1,19 @@
 """Tests for the query_sessions builtin command."""
 
-import tempfile
 import unittest
 from datetime import datetime, timezone
-from pathlib import Path
 from unittest.mock import MagicMock
 
 from odoo_client.commands.builtin import QuerySessionsCommand
-from odoo_client.state import EventRecord, LocalConfig, LocalStateClient
-from tests.support import make_state_db
+from odoo_dev_data.config import LocalConfig
+from odoo_dev_data.events import EventRecord, EventStore
+from tests.support import make_event_store
 
 UTC = timezone.utc
 
 
-def _tmp_state() -> LocalStateClient:
-    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
-    tmp.close()
-    return make_state_db(Path(tmp.name))
+def _tmp_state() -> EventStore:
+    return make_event_store()
 
 
 def _config(gap_mins: int = 60) -> LocalConfig:

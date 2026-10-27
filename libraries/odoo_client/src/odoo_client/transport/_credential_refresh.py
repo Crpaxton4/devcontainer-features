@@ -40,7 +40,7 @@ def call_refresh(
     """Invoke the refresh hook, returning ``None`` when absent or failing.
 
     The hook re-reads the local config file, which may have become invalid since
-    construction (``LocalConfig.load`` / ``from_sources`` raise ``ValueError`` on
+    construction (``LocalConfig.load`` raises ``ValueError`` on
     a now-broken file). The original authentication error must always win, so any
     exception the hook raises is swallowed and reported as "no fresh settings".
     """

@@ -20,7 +20,7 @@ class TestMainEntryPoint(unittest.TestCase):
 
     def test_main_checks_the_configuration_first(self):
         with (
-            patch("odoo_client.tui.__main__.OdooClient"),
+            patch("odoo_client.tui.__main__.build_client"),
             patch("odoo_client.tui.__main__.run"),
             patch("odoo_client.tui.__main__.LocalConfig"),
         ):
@@ -30,18 +30,18 @@ class TestMainEntryPoint(unittest.TestCase):
 
     def test_main_builds_default_registry_and_runs(self):
         with (
-            patch("odoo_client.tui.__main__.OdooClient") as MockClient,
+            patch("odoo_client.tui.__main__.build_client") as MockClient,
             patch("odoo_client.tui.__main__.run") as mock_run,
             patch("odoo_client.tui.__main__.LocalConfig"),
         ):
             entry.main()
 
-        MockClient.assert_called_once_with()
+        MockClient.assert_called_once()
         mock_run.assert_called_once()
 
     def test_main_registers_all_builtins(self):
         with (
-            patch("odoo_client.tui.__main__.OdooClient"),
+            patch("odoo_client.tui.__main__.build_client"),
             patch("odoo_client.tui.__main__.run") as mock_run,
             patch("odoo_client.tui.__main__.LocalConfig"),
         ):

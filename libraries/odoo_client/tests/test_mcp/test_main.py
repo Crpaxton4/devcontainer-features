@@ -14,18 +14,18 @@ class TestMainEntryPoint(unittest.TestCase):
 
     def test_main_builds_default_registry_and_runs(self):
         with (
-            patch("odoo_client.mcp.__main__.OdooClient") as MockClient,
+            patch("odoo_client.bootstrap.build_client") as MockClient,
             patch("odoo_client.mcp.__main__.OdooMCPServer") as MockServer,
         ):
             entry.main()
 
-        MockClient.assert_called_once_with()
+        MockClient.assert_called_once()
         MockServer.assert_called_once()
         MockServer.return_value.run.assert_called_once_with()
 
     def test_main_checks_the_configuration_first(self):
         with (
-            patch("odoo_client.mcp.__main__.OdooClient"),
+            patch("odoo_client.bootstrap.build_client"),
             patch("odoo_client.mcp.__main__.OdooMCPServer"),
         ):
             entry.main()
@@ -34,7 +34,7 @@ class TestMainEntryPoint(unittest.TestCase):
 
     def test_main_registers_all_builtins(self):
         with (
-            patch("odoo_client.mcp.__main__.OdooClient"),
+            patch("odoo_client.bootstrap.build_client"),
             patch("odoo_client.mcp.__main__.OdooMCPServer") as MockServer,
         ):
             entry.main()
@@ -47,7 +47,7 @@ class TestMainEntryPoint(unittest.TestCase):
         fake_config = MagicMock()
         fake_config.profiling = True
         with (
-            patch("odoo_client.mcp.__main__.OdooClient"),
+            patch("odoo_client.bootstrap.build_client"),
             patch("odoo_client.mcp.__main__.LocalConfig") as MockConfig,
             patch("odoo_client.mcp.__main__.OdooMCPServer") as MockServer,
         ):
@@ -59,7 +59,7 @@ class TestMainEntryPoint(unittest.TestCase):
     def test_main_exposes_every_tool(self):
         # There is no opt-in gate: the server is handed the whole tool surface.
         with (
-            patch("odoo_client.mcp.__main__.OdooClient"),
+            patch("odoo_client.bootstrap.build_client"),
             patch("odoo_client.mcp.__main__.OdooMCPServer") as MockServer,
         ):
             entry.main()

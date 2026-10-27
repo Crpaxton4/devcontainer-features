@@ -6,7 +6,7 @@ import unittest
 import xmlrpc.client
 from unittest.mock import Mock, patch
 
-from odoo_client.state.config import OdooConnectionSettings
+from odoo_client.settings import OdooConnectionSettings
 from odoo_client.transport.errors import (
     OdooAuthenticationError,
     OdooServerError,

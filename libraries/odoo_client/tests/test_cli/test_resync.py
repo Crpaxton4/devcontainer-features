@@ -12,7 +12,6 @@ from io import StringIO
 from unittest.mock import MagicMock, patch
 
 import odoo_client.cli.__main__ as cli
-from odoo_client.state import TrackerStateMissingError
 
 _MOD = "odoo_client.cli.__main__"
 
@@ -50,7 +49,7 @@ class TestCmdResync(unittest.TestCase):
             sync_github=MagicMock(return_value={"inserted": 1}),
             sync_odoo_chatter=MagicMock(return_value={"inserted": 3}),
             assert_configured=MagicMock(),
-            OdooClient=MagicMock(),
+            build_client=MagicMock(),
         )
         self.assertIn("git: inserted 2", out)
         self.assertIn("github: inserted 1", out)
@@ -65,19 +64,6 @@ class TestCmdResync(unittest.TestCase):
         self.assertEqual(out.strip(), "git: inserted 0")
         git.assert_called_once()
         gh.assert_not_called()
-
-    def test_odoo_skipped_when_tracker_db_missing(self):
-        odoo = MagicMock()
-        out = self._run(
-            ["resync", "--sources", "odoo"],
-            sync_odoo_chatter=odoo,
-            assert_configured=MagicMock(
-                side_effect=TrackerStateMissingError("no tracker database")
-            ),
-        )
-        # The odoo puller is never built/run, and the command does not crash.
-        odoo.assert_not_called()
-        self.assertIn("odoo: skipped (odoo sdk not configured)", out)
 
     def test_odoo_skipped_when_connection_settings_missing(self):
         """The guard's other failure (#642) degrades to the same skip notice."""

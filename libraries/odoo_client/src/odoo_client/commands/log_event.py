@@ -10,25 +10,21 @@ from .protocols import RpcClient
 # ``log-event --source`` validation needs the strict resolver, and under
 # ADR-005 rule 4 a surface must reach the data-layer adapters through core —
 # this module, the command-layer owner of the events append, is that door.
-from odoo_client.adapters.state import (  # noqa: F401
+from odoo_client.sessionization.persistence import (  # noqa: F401
     UnknownEventSourceError,
     source_to_event_type,
 )
-from odoo_client.state import (
-    LocalConfig,
-    LocalStateClient,
-    current_repo_label,
-)
+from odoo_dev_data.adapters.git import current_repo_label, derive_repo_label
+from odoo_dev_data.config import LocalConfig
+from odoo_dev_data.events import EventStore
 
 # The one ``owner/repo`` normalization rule, borrowed rather than restated
-# (#742). ``_derive_repo_label`` is the same helper ``current_repo_label`` and
+# (#742). ``derive_repo_label`` is the same helper ``current_repo_label`` and
 # the external-sync pullers already normalize a git remote URL with, so a
 # caller-stated ``--repo`` collapses to exactly the label a cwd-derived one
 # would — otherwise a hook event and the commit it accompanies would land under
-# two different spellings of the same repo. Private-name import, matching the
-# existing ``adapters.external_sync`` precedent.
-from odoo_client.state.db import _derive_repo_label
-from odoo_client.tracking.models import EventRecord
+# two different spellings of the same repo.
+from odoo_dev_data.events import EventRecord
 
 
 def _git_text(*args: str) -> str:
@@ -53,7 +49,7 @@ def current_branch_label() -> str:
     """Return the branch checked out in the cwd, or ``""`` when there is none.
 
     The ``branch`` counterpart to
-    :func:`~odoo_client.state.db.current_repo_label`, and best-effort in the same
+    :func:`~odoo_dev_data.adapters.git.current_repo_label`, and best-effort in the same
     way: a detached HEAD or a non-repo cwd yields ``""`` rather than a bogus
     branch name.
 
@@ -71,7 +67,7 @@ def normalize_repo_label(value: Optional[str]) -> Optional[str]:
     """Return the canonical ``owner/repo`` label for a caller-stated repo (#742).
 
     The core-layer door the surfaces normalize an incoming repo through, so the
-    CLI never has to reach past core into :mod:`odoo_client.state.db` (ADR-005 rule
+    CLI never has to reach past core into :mod:`odoo_dev_data.adapters.git` (ADR-005 rule
     4). The caller may hand over whatever it happens to have: the hook shim
     states the raw ``git remote get-url origin`` URL of the *session's* cwd
     (which is not the shim's own cwd, so the SDK cannot re-derive it), and a
@@ -95,7 +91,7 @@ def normalize_repo_label(value: Optional[str]) -> Optional[str]:
 
     if value is None or not value.strip():
         return None
-    return _derive_repo_label(value)
+    return derive_repo_label(value)
 
 
 def normalize_task_ids(values: Optional[Iterable[Any]]) -> list[str]:
@@ -201,8 +197,8 @@ class LogEventCommand(Command):
 
     Each frontend resolves its own interface-specific inputs — the source string,
     subject, payload, and timestamp — and hands them here; the command owns the
-    :class:`~odoo_client.state.models.EventRecord` construction, the
-    :meth:`~odoo_client.state.LocalStateClient.add_event` write, and — since #507 /
+    :class:`~odoo_dev_data.events.EventRecord` construction, the
+    :meth:`~odoo_dev_data.events.EventStore.add_event` write, and — since #507 /
     #509 — the two policies every frontend used to re-implement:
 
     * **Task attribution** (:meth:`resolve_task_ids`). A caller passes the
@@ -238,7 +234,7 @@ class LogEventCommand(Command):
     def __init__(
         self,
         client: Optional[RpcClient] = None,
-        state: Optional[LocalStateClient] = None,
+        state: Optional[EventStore] = None,
         config: Optional[LocalConfig] = None,
     ):
         """Bind the command, defaulting ``client`` to ``None``.
@@ -251,7 +247,7 @@ class LogEventCommand(Command):
         :param client: RPC client (unused); defaults to ``None``.
         :type client: Optional[RpcClient]
         :param state: Shared local state client, resolved lazily when ``None``.
-        :type state: Optional[LocalStateClient]
+        :type state: Optional[EventStore]
         :param config: Shared resolved SDK config, resolved lazily when ``None``.
         :type config: Optional[LocalConfig]
         """

@@ -30,7 +30,7 @@ from textual.containers import Horizontal
 from textual.screen import Screen
 from textual.widgets import Footer, Static
 
-from odoo_client.tracking.stats import SessionStats, compute_stats
+from odoo_client.sessionization.stats import SessionStats, compute_stats
 
 from .app import (
     _CONFIRM_KEYS,

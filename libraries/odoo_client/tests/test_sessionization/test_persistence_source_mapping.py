@@ -3,14 +3,14 @@
 import unittest
 from datetime import datetime, timezone
 
-from odoo_client.adapters import (
+from odoo_client.sessionization.persistence import (
     UnknownEventSourceError,
     event_record_to_raw_event,
     source_to_event_type,
 )
-from odoo_client.adapters.state.persistence import _EVENT_TYPE_TO_SOURCE
+from odoo_client.sessionization.persistence import _EVENT_TYPE_TO_SOURCE
 from odoo_client.sessionization import EventType
-from odoo_client.state import EventRecord
+from odoo_dev_data.events import EventRecord
 
 UTC = timezone.utc
 

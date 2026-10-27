@@ -25,7 +25,8 @@ from odoo_client.commands.protocols import (
     SettingsView,
     StateStore,
 )
-from odoo_client.state import LocalConfig, LocalStateClient
+from odoo_dev_data.config import LocalConfig
+from odoo_dev_data.events import EventStore
 
 
 def _protocol_methods(protocol):
@@ -75,7 +76,7 @@ class _ConformanceAssertions(unittest.TestCase):
 
 class TestStateStorePort(_ConformanceAssertions):
     def test_local_state_client_satisfies_the_port(self):
-        self.assert_class_implements(LocalStateClient, StateStore)
+        self.assert_class_implements(EventStore, StateStore)
 
     def test_port_is_consumer_derived_not_the_whole_store(self):
         """The ingest-only members stay off the port (adapters use them directly)."""

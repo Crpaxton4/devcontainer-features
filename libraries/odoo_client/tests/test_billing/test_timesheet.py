@@ -8,14 +8,12 @@ producer (#180). A fake :class:`OdooExecutor` records calls so the scalar-id /
 adopt-not-duplicate guarantees are checked at the wire level.
 """
 
-import tempfile
 import unittest
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
 from odoo_client.client import OdooClient
-from odoo_client.state import LocalStateClient
+from odoo_dev_data.events import EventStore
 from odoo_client.transport.errors import OdooServerError
 from odoo_client.transport.executor import OdooExecutor
 from odoo_client.billing.timesheet import (
@@ -25,15 +23,13 @@ from odoo_client.billing.timesheet import (
     resolve_employee_id,
     sweep_orphaned_uploads,
 )
-from tests.support import make_state_db
+from tests.support import make_event_store
 
 UTC = timezone.utc
 
 
-def _tmp_db() -> LocalStateClient:
-    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
-    tmp.close()
-    return make_state_db(Path(tmp.name))
+def _tmp_db() -> EventStore:
+    return make_event_store()
 
 
 class _StrictBrowseHashExecutor(OdooExecutor):

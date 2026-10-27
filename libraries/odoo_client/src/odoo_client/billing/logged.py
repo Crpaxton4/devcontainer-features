@@ -6,7 +6,7 @@ Odoo-reading data-layer helper behind the TUI review surface's
 already-logged badge, #378 item 7). Under ADR-005 rule 4 a surface must
 reach the data layer through core; the TUI driver imports the read from
 here, retiring the last ``tui.app`` surface→data edge, mirroring the doors
-:mod:`odoo_client.commands.log_event` (#717) and :mod:`odoo_client.tracking.events`
+:mod:`odoo_client.commands.log_event` (#717) and :mod:`odoo_client.sessionization.persistence`
 (#718) provide for their seams.
 """
 

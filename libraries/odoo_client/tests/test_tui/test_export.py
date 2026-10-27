@@ -1,26 +1,22 @@
 """Tests for the TUI export helpers (composing the #105 renderers)."""
 
-import tempfile
 import unittest
 from datetime import date, datetime, timezone
-from pathlib import Path
 
-from odoo_client.state import EventRecord, LocalStateClient
+from odoo_dev_data.events import EventRecord, EventStore
 from odoo_client.tui.export import (
     build_result,
     config_for_window,
     export_csv,
     export_markdown,
 )
-from tests.support import make_state_db
+from tests.support import make_event_store
 
 UTC = timezone.utc
 
 
-def _tmp_db() -> LocalStateClient:
-    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
-    tmp.close()
-    return make_state_db(Path(tmp.name))
+def _tmp_db() -> EventStore:
+    return make_event_store()
 
 
 def _commit(db, hour, minute, *, day=1, task="101", repo="acme/web"):

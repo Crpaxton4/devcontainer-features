@@ -16,7 +16,7 @@ from odoo_client.commands.builtin import (
     builtin_command,
     register_builtins,
 )
-from odoo_client.state import ModelIdsNotWritableError
+from odoo_dev_data.config import ModelIdsNotWritableError
 
 TASK_FIELDS = ["name", "project_id", "stage_id", "user_ids", "date_deadline"]
 

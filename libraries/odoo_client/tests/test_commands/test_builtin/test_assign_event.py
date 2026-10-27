@@ -7,26 +7,22 @@ tests drive the command over a real schema-provisioned store (no live Odoo — t
 client is never touched by this command).
 """
 
-import tempfile
 import unittest
 from datetime import datetime, timezone
-from pathlib import Path
 from unittest.mock import MagicMock
 
 from odoo_client.commands.builtin.assign_event import AssignEventCommand
-from odoo_client.state import EventRecord, LocalStateClient
-from tests.support import make_state_db
+from odoo_dev_data.events import EventRecord, EventStore
+from tests.support import make_event_store
 
 UTC = timezone.utc
 
 
-def _tmp_db() -> LocalStateClient:
-    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
-    tmp.close()
-    return make_state_db(Path(tmp.name))
+def _tmp_db() -> EventStore:
+    return make_event_store()
 
 
-def _unattributed(store: LocalStateClient, external_id: str) -> int:
+def _unattributed(store: EventStore, external_id: str) -> int:
     record = store.add_event(
         EventRecord(
             id=None,
@@ -41,7 +37,7 @@ def _unattributed(store: LocalStateClient, external_id: str) -> int:
     return record.id
 
 
-def _cmd(store: LocalStateClient) -> AssignEventCommand:
+def _cmd(store: EventStore) -> AssignEventCommand:
     # The command needs no RPC client; a MagicMock stands in and is never called.
     return AssignEventCommand(MagicMock(), state=store)
 

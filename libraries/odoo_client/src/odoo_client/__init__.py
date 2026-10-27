@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, Any
 from . import commands
 from .client import OdooClient
 from .commands import Command, Registry
-from .state import OdooConnectionSettings
+from .settings import OdooConnectionSettings
 from .query.domain import Domain, DomainExpression
 from .records import OdooRecordset
 from .records.recordset import Record

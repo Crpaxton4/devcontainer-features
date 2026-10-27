@@ -1,6 +1,7 @@
 from typing import Dict, Iterator, Optional, Tuple, Type
 
-from odoo_client.state import LocalConfig, LocalStateClient
+from odoo_dev_data.config import LocalConfig
+from odoo_dev_data.events import EventStore
 
 from .command import Command
 from .protocols import RpcClient, StateStore
@@ -12,7 +13,7 @@ class Registry:
     The registry keeps use-case orchestration separate from transport and state
     details while injecting the shared SDK dependencies into each registered
     command. Commands receive three peers: the :class:`RpcClient`, a
-    :class:`StateStore` (the :class:`LocalStateClient` SQLite session FSM in
+    :class:`StateStore` (the :class:`EventStore` SQLite session FSM in
     production, #718), and the :class:`LocalConfig`
     (resolved SDK settings). The state client and config are optional; when
     omitted, commands resolve their own lazily on first use, preserving the
@@ -46,7 +47,7 @@ class Registry:
         ``state_client`` constructor argument, which this property returns as-is.
         """
         if self._state_client is None:
-            self._state_client = LocalStateClient()
+            self._state_client = EventStore()
         return self._state_client
 
     def register(

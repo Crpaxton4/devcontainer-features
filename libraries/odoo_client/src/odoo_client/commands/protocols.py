@@ -9,7 +9,7 @@ per external system, mirroring the ``adapters/`` package layout:
 Port                      Concrete adapter                       Adapter package
 ========================  =====================================  =========================
 :class:`RpcClient`        ``OdooClient``                         ``client/`` + ``transport/``
-:class:`StateStore`       ``LocalStateClient``                   ``state/`` (+ ``adapters/state``)
+:class:`StateStore`       ``EventStore``                   ``state/`` (+ ``adapters/state``)
 :class:`GitGateway`       ``sync_git_log`` module surface        ``adapters/git``
 :class:`IssueTracker`     ``sync_github`` module surface         ``adapters/github``
 :class:`SettingsView`     ``LocalConfig``                        ``state/config``
@@ -29,14 +29,11 @@ inject overrides through that command's ``pullers`` seam, while
 from datetime import date, datetime
 from typing import TYPE_CHECKING, Any, Optional, Protocol
 
-from odoo_client.tracking.models import (
-    EventRecord,
-    SessionWindow,
-)
+from odoo_dev_data.events import EventRecord, SessionWindow
 
 if TYPE_CHECKING:  # pragma: no cover
     from odoo_client.records.recordset import OdooRecordset
-    from odoo_client.state import LocalConfig
+    from odoo_dev_data.config import LocalConfig
 
 
 class RpcClient(Protocol):
@@ -71,7 +68,7 @@ class RpcClient(Protocol):
 class StateStore(Protocol):
     """Structural contract for the local task-tracker store core drives (#718).
 
-    The consumer-side port for :class:`~odoo_client.state.LocalStateClient`
+    The consumer-side port for :class:`~odoo_dev_data.events.EventStore`
     (SQLite, host-provisioned): every member below is called today by the
     command layer, the billing/tracking workflows, or the TUI driver's
     read paths. The store's ingest-only members (``add_event_dedup``,
@@ -79,7 +76,7 @@ class StateStore(Protocol):
     absent — only the data-side resync adapters use them, and an adapter
     talking to its own store needs no port.
 
-    ``LocalStateClient`` satisfies this Protocol structurally, with no
+    ``EventStore`` satisfies this Protocol structurally, with no
     change.
     """
 
@@ -197,7 +194,7 @@ class SettingsView(Protocol):
     """Read-only resolved-settings surface a surface driver consumes (#718).
 
     The TUI driver needs exactly one knob from the injected
-    :class:`~odoo_client.state.LocalConfig` today (the session gap it prints in
+    :class:`~odoo_dev_data.config.LocalConfig` today (the session gap it prints in
     the empty-window hint); this consumer-side view names that surface so
     the driver's dataclass annotations stop importing the data layer. Widen
     it only when a surface legitimately reads more. ``LocalConfig``

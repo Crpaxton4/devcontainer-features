@@ -11,13 +11,11 @@ fabricated ``:tick:<index>`` string. Fabricated numeric ids collapse to one row
 under any regex and so hid a format mismatch (issues #517, #526).
 """
 
-import tempfile
 import unittest
 from datetime import date, datetime, timedelta, timezone
-from pathlib import Path
 
 from odoo_client.commands.builtin import AssignEventCommand
-from odoo_client.state import EventRecord
+from odoo_dev_data.events import EventRecord
 from odoo_client.tui.app import (
     AppState,
     TuiDeps,
@@ -36,7 +34,7 @@ from odoo_client.tui.triage import (
     triage_body_lines,
 )
 from odoo_client.tui.window import DateWindow
-from tests.support import make_state_db
+from tests.support import make_event_store
 
 UTC = timezone.utc
 
@@ -277,9 +275,7 @@ def _fixture_store():
     The ticks are keyed exactly as the calendar resync writes them, so this
     fixture exercises the real ingestion→triage key contract.
     """
-    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
-    tmp.close()
-    store = make_state_db(Path(tmp.name))
+    store = make_event_store()
     base = MEETING_START
     for moment in _tick_moments():
         store.add_event(
@@ -353,9 +349,7 @@ class TestTriageTransitionsOverFixture(unittest.TestCase):
         self.assertEqual(state.mode, "main")
 
     def test_move_on_empty_queue_is_noop(self):
-        tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
-        tmp.close()
-        empty = make_state_db(Path(tmp.name))
+        empty = make_event_store()
         deps = _deps(empty)
         state = enter_triage(deps, self._state())
         result = move_triage_selection(state, 1)
@@ -378,9 +372,7 @@ class TestTriageTransitionsOverFixture(unittest.TestCase):
         self.assertIn("invalid task id", state.status)
 
     def test_assign_on_empty_queue_is_guarded(self):
-        tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
-        tmp.close()
-        empty = make_state_db(Path(tmp.name))
+        empty = make_event_store()
         deps = _deps(empty)
         state = enter_triage(deps, self._state())
         state = replace_input(state, "24648")

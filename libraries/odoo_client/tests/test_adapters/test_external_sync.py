@@ -18,18 +18,17 @@ from pathlib import Path
 from unittest.mock import patch
 
 from odoo_client.adapters import external_sync as ex
-from odoo_client.state import LocalConfig, LocalStateClient
+from odoo_dev_data.config import LocalConfig
+from odoo_dev_data.events import EventStore
 from odoo_client.transport.errors import OdooError
-from tests.support import make_state_db
+from tests.support import make_event_store
 
 _SEP = "\x1f"
 _NOW = datetime(2026, 7, 15, tzinfo=timezone.utc)  # pins the resync window in tests
 
 
-def _tmp_state() -> LocalStateClient:
-    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
-    tmp.close()
-    return make_state_db(Path(tmp.name))
+def _tmp_state() -> EventStore:
+    return make_event_store()
 
 
 def _config(**behavior) -> LocalConfig:

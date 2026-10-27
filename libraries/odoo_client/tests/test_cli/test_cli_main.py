@@ -1,23 +1,19 @@
 """Tests for odoo_client.cli.__main__ CLI companion."""
 
-import tempfile
 import unittest
 from datetime import datetime, timezone
 from io import StringIO
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import odoo_client.cli.__main__ as cli
-from odoo_client.state import LocalStateClient as TaskStateDB
-from tests.support import make_state_db
+from odoo_dev_data.events import EventStore as TaskStateDB
+from tests.support import make_event_store
 
 ASSERT_GUARD = "odoo_client.cli.__main__.assert_configured"
 
 
 def _tmp_db() -> TaskStateDB:
-    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
-    tmp.close()
-    return make_state_db(Path(tmp.name))
+    return make_event_store()
 
 
 def _client() -> MagicMock:
@@ -53,14 +49,6 @@ NORMALIZE_MERGE = "odoo_client.commands.builtin.normalize_timesheets.merge_times
 
 
 class TestAssertEnv(unittest.TestCase):
-    def test_exits_when_tracker_db_missing(self):
-        from odoo_client.state import TrackerStateMissingError
-
-        with patch(ASSERT_GUARD, side_effect=TrackerStateMissingError("no db")):
-            with self.assertRaises(SystemExit) as ctx:
-                cli._assert_env()
-        self.assertEqual(ctx.exception.code, 1)
-
     def test_exits_when_connection_settings_missing(self):
         # The guard's second failure mode (#642) must exit 1 the same way.
         with patch(ASSERT_GUARD, side_effect=ValueError("Missing Odoo connection")):
@@ -78,7 +66,7 @@ class TestAssertEnv(unittest.TestCase):
 
 class TestLazyOdooClient(unittest.TestCase):
     def test_defers_construction_until_first_use(self):
-        with patch("odoo_client.cli.__main__.OdooClient") as make_client:
+        with patch("odoo_client.cli.__main__.build_client") as make_client:
             lazy = cli._LazyOdooClient()
             make_client.assert_not_called()  # construction is deferred
             real = make_client.return_value
@@ -193,7 +181,7 @@ class TestMain(unittest.TestCase):
         captured = StringIO()
         with (
             patch("sys.stdout", captured),
-            patch("odoo_client.cli.__main__.OdooClient"),
+            patch("odoo_client.cli.__main__.build_client"),
         ):
             self._run_main(["normalize"])
         self.assertIn("No duplicate", captured.getvalue())
@@ -205,7 +193,7 @@ class TestMain(unittest.TestCase):
         with (
             patch("sys.stdout", captured),
             patch(ASSERT_GUARD),
-            patch("odoo_client.cli.__main__.OdooClient"),
+            patch("odoo_client.cli.__main__.build_client"),
             patch("odoo_client.cli.__main__.TaskStateDB", return_value=db),
             patch(_RESOLVE_EMP, return_value=77),
             patch("sys.argv", ["odoo_client.cli", "get-employee-id"]),

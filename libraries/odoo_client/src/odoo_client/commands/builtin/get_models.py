@@ -1,6 +1,6 @@
 from typing import Any, Dict, List, Optional
 
-from odoo_client.state.config import ModelIdsNotWritableError
+from odoo_dev_data.config import ModelIdsNotWritableError
 
 from ..command import Command
 from ._registration import builtin_command

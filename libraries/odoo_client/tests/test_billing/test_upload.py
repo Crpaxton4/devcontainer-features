@@ -15,8 +15,8 @@ from datetime import date, datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
 from odoo_client.commands.builtin.query_sessions import QuerySessionsCommand
-from odoo_client.state import EventRecord
-from odoo_client.state.config import LocalConfig
+from odoo_dev_data.events import EventRecord
+from odoo_dev_data.config import LocalConfig
 from odoo_client.transport.errors import OdooServerError, OdooTransportError
 from odoo_client.billing.upload import (
     range_bounds,
@@ -24,7 +24,7 @@ from odoo_client.billing.upload import (
     _derived_description,
     _numeric_task_id,
 )
-from tests.support import make_state_db
+from tests.support import make_event_store
 
 _MOD = "odoo_client.billing.upload"
 _RECONCILE = f"{_MOD}.reconcile_session"
@@ -186,7 +186,7 @@ class TestDerivedDescription(unittest.TestCase):
     def test_falls_back_to_event_summary_without_run_summary(self):
         # Resync'd history that never passed through the FSM still derives a
         # narrative from the session window's events.
-        db = make_state_db()
+        db = make_event_store()
         started, ended = self._window()
         db.add_event(
             EventRecord(
@@ -205,7 +205,7 @@ class TestDerivedDescription(unittest.TestCase):
         self.assertTrue(description.startswith("[/] "))
 
     def test_falls_back_to_session_key_when_nothing_derives(self):
-        db = make_state_db()
+        db = make_event_store()
         started, ended = self._window()
         description = _derived_description(db, 100, self._session(100, started, ended))
         self.assertEqual(description, "[/] session 100|5")
@@ -240,7 +240,7 @@ class TestDerivedDescription(unittest.TestCase):
         # The explicit requirement of #710: the tally is a TRAILING DEBUG
         # SUFFIX, never the headline. The chatter note the user wrote leads and
         # the 231-Bash tally follows it, labelled as debug.
-        db = make_state_db()
+        db = make_event_store()
         started, ended = self._window()
         self._add_event(db, "chatter", subject="Reconciled the July VAT postings")
         for _ in range(3):
@@ -252,7 +252,7 @@ class TestDerivedDescription(unittest.TestCase):
 
     def test_review_session_names_the_pr_and_verdict(self):
         # Previously a review session said nothing about which PR was reviewed.
-        db = make_state_db()
+        db = make_event_store()
         started, ended = self._window()
         self._add_event(
             db,
@@ -268,7 +268,7 @@ class TestDerivedDescription(unittest.TestCase):
     def test_hook_only_session_is_named_by_its_first_prompt(self):
         # The `[/] session <task>|<event>` case: hook rows only, but the shim
         # now records the truncated first prompt, so the row says what was asked.
-        db = make_state_db()
+        db = make_event_store()
         started, ended = self._window()
         self._add_event(
             db,
@@ -284,7 +284,7 @@ class TestDerivedDescription(unittest.TestCase):
         )
 
     def test_upload_passes_derived_description_to_reconciler(self):
-        db = make_state_db()
+        db = make_event_store()
         started, ended = self._window()
         self._add_event(db, "chatter", subject="derived narrative")
         session = self._session(100, started, ended)
@@ -439,7 +439,7 @@ class TestReviewSessionBillsThroughSharedPath(unittest.TestCase):
     """
 
     def test_lone_review_session_floors_to_minimum(self):
-        state = make_state_db()
+        state = make_event_store()
         state.add_event(
             EventRecord(
                 id=None,

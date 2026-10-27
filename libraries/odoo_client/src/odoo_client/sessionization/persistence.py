@@ -1,7 +1,7 @@
 """State-persistence adapter for the sessionization ETL.
 
 Bridges the SQLite ``events`` table (via
-:class:`~odoo_client.state.LocalStateClient`) to the pure sessionization data
+:class:`~odoo_dev_data.events.EventStore`) to the pure sessionization data
 model. Reading turns :class:`EventRecord` rows into :class:`RawEvent` inputs used
 by the read-only gap-sweep optimizer and the TUI export. Sessions are derived
 from the events at query time, so there is no session materialization here.
@@ -13,7 +13,7 @@ from datetime import datetime
 from typing import Optional
 
 from odoo_client.sessionization import EventType, RawEvent
-from odoo_client.state import EventRecord, LocalStateClient
+from odoo_dev_data.events import EventRecord, EventStore
 
 # Prefix marking an EventRecord.source as originating from a Claude Code hook.
 _CLAUDE_SOURCE_PREFIX = "claude:"
@@ -151,7 +151,7 @@ def is_synthetic_tick(record: EventRecord) -> bool:
 
 
 def load_raw_events(
-    state: LocalStateClient,
+    state: EventStore,
     start: Optional[datetime] = None,
     end: Optional[datetime] = None,
     *,

@@ -59,7 +59,7 @@ def _window_entry(
     # Display-only metadata, mirroring the SQL derivation's
     # ``COALESCE(MAX(NULLIF(repo, '')), :agentless)``: the greatest real label
     # wins, and a purely repo-less window yields the absent repo
-    # (:data:`~odoo_client.state.db.AGENTLESS_REPO`, i.e. ``""``) that path also
+    # (:data:`~odoo_dev_data.events.AGENTLESS_REPO`, i.e. ``""``) that path also
     # returns — the two derivations agree on the same input (#508).
     repo = max((event.repo for event in window_events if event.repo), default="")
     billed = billable_seconds((end_raw - start).total_seconds(), config)

@@ -18,8 +18,8 @@ import unittest
 from datetime import datetime, timezone
 
 from odoo_client.commands.command import MAX_CHATTER_BODY_CHARS
-from odoo_client.state import EventRecord
-from odoo_client.state.summary import (
+from odoo_dev_data.events import EventRecord
+from odoo_client.billing.summary import (
     _HEADLINE_ITEM_CHARS,
     summarize_run_activity,
     summarize_session_context,

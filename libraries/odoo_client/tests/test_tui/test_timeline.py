@@ -3,7 +3,7 @@
 import unittest
 from datetime import datetime, timezone
 
-from odoo_client.state.db import AGENTLESS_REPO
+from odoo_dev_data.events import AGENTLESS_REPO
 from odoo_client.tui.timeline import _lane_label, _parse, build_timeline
 
 

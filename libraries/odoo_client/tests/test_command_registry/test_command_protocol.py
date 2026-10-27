@@ -55,7 +55,7 @@ class TestCommandDependencyInjection(unittest.TestCase):
     def test_state_lazily_created_when_absent(self):
         created = Mock()
         with patch(
-            "odoo_client.commands.command.LocalStateClient", return_value=created
+            "odoo_client.commands.command.EventStore", return_value=created
         ) as MockState:
             cmd = ConcreteCommand(client=Mock())
             got = cmd.state

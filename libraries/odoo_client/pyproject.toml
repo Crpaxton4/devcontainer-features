@@ -8,6 +8,7 @@ version = "8.2.0"
 description = "Python SDK for Odoo XML-RPC access and command dispatch helpers."
 requires-python = ">=3.10"
 dependencies = [
+    "odoo_dev_data",
     "fastmcp>=4,<5",
     "markdown-it-py>=3.0.0",
     "markitdown[docx,pdf]>=0.1.6",
@@ -104,17 +105,13 @@ output = "reports/complexipy/"
 
 # ── ADR-005 layering contracts ──────────────────────────────────────────────
 # Layer model (docs/source/design/architecture/ADR-005): surface (cli, mcp,
-# tui) / core (commands, billing, sessionization, tracking, and —
+# tui) / core (commands, billing, sessionization, and —
 # promoted by #718 — the records/query domain types) / data (transport,
-# client, fields, env, state, adapters, services) + shared kernel (_utils,
+# client, fields, env, adapters, services) + shared kernel (_utils,
 # errors, settings). Every ignore entry below is either marked "permanent"
 # (a named ADR-005 exception) or carries the issue that deletes it;
 # `unmatched_ignore_imports_alerting = "error"` means the lists can only
 # shrink. Adding a NEW entry requires an ADR-005 amendment in the same PR.
-#
-# The `odoo_client.state.models` alias (#718) is the one shim left; it cannot
-# be unlisted (it lives inside the listed `state` package), so its single
-# re-export edge is an explicit permanent ignore.
 [tool.importlinter]
 root_packages = ["odoo_client"]
 
@@ -139,7 +136,6 @@ source_modules = [
     "odoo_client.commands",
     "odoo_client.billing",
     "odoo_client.sessionization",
-    "odoo_client.tracking",
     "odoo_client.records",
     "odoo_client.query",
     # data
@@ -147,7 +143,6 @@ source_modules = [
     "odoo_client.client",
     "odoo_client.fields",
     "odoo_client.env",
-    "odoo_client.state",
     "odoo_client.adapters",
     "odoo_client.services",
     # shared kernel
@@ -169,7 +164,6 @@ source_modules = [
     "odoo_client.client",
     "odoo_client.fields",
     "odoo_client.env",
-    "odoo_client.state",
     "odoo_client.adapters",
     "odoo_client.services",
 ]
@@ -177,25 +171,16 @@ forbidden_modules = [
     "odoo_client.commands",
     "odoo_client.billing",
     "odoo_client.sessionization",
-    "odoo_client.tracking",
     # promoted core domain types (#718)
     "odoo_client.records",
     "odoo_client.query",
 ]
 ignore_imports = [
-    # permanent (ADR-005): adapters borrow the sessionization event
-    # vocabulary (pure frozen models), not behaviour. (Paths updated by
-    # #718's per-system adapter packages.)
-    "odoo_client.adapters.state.persistence -> odoo_client.sessionization",
     # permanent (ADR-005 amendment, #718): the client is the adapter behind
     # the RpcClient port, and OdooRecordset is that port's return type — an
     # adapter naming the domain type it produces is the sanctioned
     # hexagonal direction.
     "odoo_client.client.client -> odoo_client.records.recordset",
-    # permanent (ADR-005 amendment, #718): the state.models alias re-exports
-    # the promoted tracker vocabulary (sys.modules aliasing; the one shim
-    # that lives inside a listed package).
-    "odoo_client.state.models -> odoo_client.tracking.models",
 ]
 unmatched_ignore_imports_alerting = "error"
 
@@ -214,7 +199,6 @@ forbidden_modules = [
     "odoo_client.client",
     "odoo_client.fields",
     "odoo_client.env",
-    "odoo_client.state",
     "odoo_client.adapters",
     "odoo_client.services",
 ]
@@ -244,7 +228,6 @@ source_modules = [
     "odoo_client.commands",
     "odoo_client.billing",
     "odoo_client.sessionization",
-    "odoo_client.tracking",
     # data
     "odoo_client.transport",
     "odoo_client.client",
@@ -252,7 +235,6 @@ source_modules = [
     "odoo_client.query",
     "odoo_client.fields",
     "odoo_client.env",
-    "odoo_client.state",
     "odoo_client.adapters",
     "odoo_client.services",
     # shared kernel
@@ -278,9 +260,8 @@ unmatched_ignore_imports_alerting = "error"
 # escaping rules 1-5. Within a layer, ":"-separated siblings may import each
 # other (surface independence stays rule 1's job, so its one named exception
 # is not restated here); a lower layer importing a higher one is a contract
-# break. The upward exceptions duplicate rule 3's permanent vocabulary/alias
-# entries plus the settings kernel's lazy resolver seam — every one is an
-# ADR-005 named exception.
+# break. The one upward exception duplicates rule 3's permanent entry and
+# is an ADR-005 named exception.
 [[tool.importlinter.contracts]]
 name = "ADR-005 rule 6: exhaustive layer map — unclassified new modules fail CI"
 type = "layers"
@@ -297,24 +278,13 @@ exhaustive_ignores = [
 ]
 layers = [
     "cli : mcp : tui",
-    "commands : billing : sessionization : tracking : records : query",
-    "transport : client : fields : env : state : adapters : services",
+    "commands : billing : sessionization : records : query",
+    "transport : client : fields : env : adapters : services",
     "_utils : settings : _text",
 ]
 ignore_imports = [
-    # permanent (ADR-005): the sessionization event vocabulary borrowed by
-    # the persistence adapter (rule 3's entries, restated for this
-    # contract's lens).
-    "odoo_client.adapters.state.persistence -> odoo_client.sessionization",
     # permanent (ADR-005 amendment, #718): adapter names the domain type its
     # port returns.
     "odoo_client.client.client -> odoo_client.records.recordset",
-    # permanent (ADR-005 amendment, #718): the state.models alias re-exports
-    # the promoted tracker vocabulary.
-    "odoo_client.state.models -> odoo_client.tracking.models",
-    # permanent (ADR-005, #717): the settings kernel's one seam back into
-    # the resolver — OdooConnectionSettings.from_sources imports LocalConfig
-    # lazily inside the call, and grimp sees function-body imports.
-    "odoo_client.settings -> odoo_client.state.config",
 ]
 unmatched_ignore_imports_alerting = "error"

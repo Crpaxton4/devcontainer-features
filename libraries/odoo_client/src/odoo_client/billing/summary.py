@@ -1,7 +1,7 @@
 """Machine-derived run/session summaries from recorded events and notes (#626).
 
 Pure helpers — no I/O, no state — that turn a run's (or derived session's)
-recorded :class:`~odoo_client.state.models.EventRecord` rows and its locally-stored
+recorded :class:`~odoo_dev_data.events.EventRecord` rows and its locally-stored
 notes into a single-line, reconstructable narrative of what happened: the tools
 that ran, the commits (short sha + subject line), the branch/PR provenance, the
 recorded test result, and the checkpoint notes. The billing upload attaches the
@@ -29,7 +29,7 @@ from __future__ import annotations
 import re
 from collections import Counter
 
-from .models import EventRecord
+from odoo_dev_data.events import EventRecord
 
 #: Joins between the top-level summary segments (actions / commits / provenance
 #: / notes) and between the items inside one segment, kept distinct so a segment
@@ -58,7 +58,7 @@ _TRUNCATION_MARK = "..."
 
 #: Sources whose events carry a forge/VCS narrative (tier 2). ``comment`` is the
 #: review-family alias the resync puller writes for an authored PR/issue comment
-#: (see ``adapters.state.persistence._SOURCE_ALIASES``), so it is summarised
+#: (see ``sessionization.persistence._SOURCE_ALIASES``), so it is summarised
 #: beside ``review`` rather than being silently dropped.
 _REVIEW_SOURCES = ("review", "comment")
 

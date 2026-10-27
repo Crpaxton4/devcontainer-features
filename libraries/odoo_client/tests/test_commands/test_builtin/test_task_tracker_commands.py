@@ -1,8 +1,6 @@
 """Tests for task-tracking Command subclasses."""
 
-import tempfile
 import unittest
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from odoo_client.commands.builtin.get_task import GetTaskCommand
@@ -14,17 +12,15 @@ from odoo_client.commands.builtin.task_list import TaskListCommand
 from odoo_client.commands.builtin.task_note import TaskNoteCommand
 from odoo_client.commands.builtin.task_question import TaskQuestionCommand
 from odoo_client.commands.command import MAX_CHATTER_BODY_CHARS
-from odoo_client.state import LocalStateClient as TaskStateDB
-from tests.support import make_state_db
+from odoo_dev_data.events import EventStore as TaskStateDB
+from tests.support import make_event_store
 
 _NOTE = "odoo_client.commands.builtin.task_note"
 _QUESTION = "odoo_client.commands.builtin.task_question"
 
 
 def _tmp_db() -> TaskStateDB:
-    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
-    tmp.close()
-    return make_state_db(Path(tmp.name))
+    return make_event_store()
 
 
 def _client(uid: int = 7) -> MagicMock:

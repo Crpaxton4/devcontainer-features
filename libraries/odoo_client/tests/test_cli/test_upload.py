@@ -10,28 +10,24 @@ evidence is the shared-path test: the same seeded events driven through the TUI
 non-interactive ``odoo-sdk upload`` bills exactly the rows the TUI would.
 """
 
-import tempfile
 import unittest
 from datetime import date, datetime, timedelta, timezone
 from io import StringIO
-from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
 
 import odoo_client.cli.__main__ as cli
-from odoo_client.state import EventRecord, LocalStateClient
-from tests.support import make_state_db
+from odoo_dev_data.events import EventRecord, EventStore
+from tests.support import make_event_store
 
 _MOD = "odoo_client.cli.__main__"
 UTC = timezone.utc
 GAP = 3600  # one hour, matching the seeded event spacing
 
 
-def _seed_db() -> LocalStateClient:
+def _seed_db() -> EventStore:
     """Return a temp state DB seeded with two events forming one task session."""
-    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
-    tmp.close()
-    db = make_state_db(Path(tmp.name))
+    db = make_event_store()
     base = datetime(2026, 6, 1, 9, 0, tzinfo=UTC)
     for offset in (0, GAP):  # exactly one gap apart -> a single derived session
         db.add_event(
@@ -93,15 +89,13 @@ def _config() -> MagicMock:
     return config
 
 
-def _run_cli(
-    argv: list[str], db: LocalStateClient, client: _RecordingOdooClient
-) -> str:
+def _run_cli(argv: list[str], db: EventStore, client: _RecordingOdooClient) -> str:
     """Drive ``main`` for ``argv`` against the seeded DB and fake transport."""
     out = StringIO()
     with (
         patch(f"{_MOD}.TaskStateDB", return_value=db),
         patch(f"{_MOD}._assert_env"),
-        patch(f"{_MOD}.OdooClient", return_value=client),
+        patch(f"{_MOD}.build_client", return_value=client),
         patch(f"{_MOD}.LocalConfig") as local_config,
         patch("sys.stdout", out),
         patch("sys.argv", ["odoo-sdk", *argv]),
