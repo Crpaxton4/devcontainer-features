@@ -16,7 +16,7 @@ target series.
 
 ```bash
 <base directory>/scripts/run-tests.sh <repo> <task_id> <module> \
-  [--test-tags T|all] [--db-suffix S] [--with-tours] [--repo-path DIR] \
+  [--test-tags T|all] [--db-suffix S] [--with-tours] [--repo-root DIR] \
   [--addons-path P] [--data-dir DIR] [--target-series NN.0] \
   [--odoo-bin PATH] [--odoo-conf PATH] [--put <artifacts_dir>]
 ```

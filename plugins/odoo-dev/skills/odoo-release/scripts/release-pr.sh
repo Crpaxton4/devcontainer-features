@@ -31,6 +31,8 @@
 # Exit codes: 0 ok | 2 usage | 5 manifest missing/empty/unparseable
 set -euo pipefail
 
+JSON_GET="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../scripts" && pwd)/json-get.sh"
+
 usage() {
   echo "usage: release-pr.sh <owner/repo> <from> <to> --manifest-file F --assignee LOGIN --reviewer LOGIN|none [--hosting odoo-sh|on-prem] [--database DB] [--title T]" >&2
 }
@@ -53,8 +55,8 @@ done
 [ -n "$manifest" ] || { echo "--manifest-file is required" >&2; exit 2; }
 [ -s "$manifest" ] || { echo "manifest file is missing or empty: $manifest" >&2; exit 5; }
 # Required so that "who owns this" is answered by a human, not by a default.
-[ -n "$assignee" ] || { echo "--assignee is required: read release_assignee from the repo map, or have a human run repo-map.sh set-release-owners" >&2; exit 2; }
-[ -n "$reviewer" ] || { echo "--reviewer is required: read release_reviewer from the repo map, or have a human run repo-map.sh set-release-owners ('none' records a deliberate absence)" >&2; exit 2; }
+[ -n "$assignee" ] || { echo "--assignee is required: read release_assignee from project-resolve.sh, or have a human run repo-map.sh set-release-owners" >&2; exit 2; }
+[ -n "$reviewer" ] || { echo "--reviewer is required: read release_reviewer from project-resolve.sh, or have a human run repo-map.sh set-release-owners ('none' records a deliberate absence)" >&2; exit 2; }
 case "$hosting" in
   odoo-sh) ;;
   on-prem) [ -n "$database" ] || { echo "--database is required with --hosting on-prem, so the commands in the PR are copy-pastable rather than templated" >&2; exit 2; } ;;
@@ -65,18 +67,17 @@ command -v gh >/dev/null 2>&1 || { echo "gh is not installed" >&2; exit 2; }
 body_file="$(mktemp "${TMPDIR:-/tmp}/release-body.XXXXXX.md")"
 trap 'rm -f "$body_file"' EXIT
 
-# Passed in rather than computed in node so the date is the shell's, and one
+# Passed in rather than computed in JavaScript so the date is the shell's, and one
 # release cannot end up stamped with two different days.
 today="$(date -u +%Y-%m-%d)"
 
-node -e '
-  const fs = require("fs");
-  const [manifestPath, from, to, today, hosting, database, out] = process.argv.slice(1);
-  let m;
-  try { m = JSON.parse(fs.readFileSync(manifestPath, "utf8")); }
-  catch (e) { console.error("unparseable manifest: " + e.message); process.exit(5); }
-  if (!m.table_md) { console.error("manifest has no table_md"); process.exit(5); }
+table_md="$("$JSON_GET" d.table_md <"$manifest")" \
+  || { echo "unparseable manifest: $manifest" >&2; exit 5; }
+[ -n "$table_md" ] || { echo "manifest has no table_md" >&2; exit 5; }
 
+"$JSON_GET" '(() => {
+  const m = d;
+  const { from, to, today, hosting, database } = a;
   const prCount = (m.prs?.length ?? 0) + (m.unresolved?.length ?? 0);
   const lines = [
     `## Release: \`${from}\` -> \`${to}\``,
@@ -141,8 +142,9 @@ node -e '
     }
   }
 
-  fs.writeFileSync(out, lines.join("\n"));
-' "$manifest" "$from" "$to" "$today" "$hosting" "$database" "$body_file"
+  return lines.join("\n");
+})()' from="$from" to="$to" today="$today" hosting="$hosting" database="$database" \
+  <"$manifest" >"$body_file"
 
 [ -n "$title" ] || title="release($to): $from -> $to ($today)"
 
@@ -156,7 +158,7 @@ if [ "$dry_run" = true ]; then
 fi
 
 existing="$(gh pr list --repo "$slug" --head "$from" --base "$to" --state open --json number --limit 1 2>/dev/null || echo '[]')"
-pr_number="$(node -e 'const a=JSON.parse(process.argv[1]||"[]");console.log(a.length?a[0].number:"")' "$existing")"
+pr_number="$("$JSON_GET" 'd.length ? d[0].number : ""' <<<"${existing:-[]}")"
 
 if [ -n "$pr_number" ]; then
   action="updated"
@@ -167,7 +169,7 @@ else
   args=(--repo "$slug" --base "$to" --head "$from" --title "$title" --body-file "$body_file" --draft)
   gh pr create "${args[@]}" >&2
   pr_number="$(gh pr list --repo "$slug" --head "$from" --base "$to" --state open --json number --limit 1 \
-    | node -e 'const a=JSON.parse(require("fs").readFileSync(0,"utf8"));console.log(a.length?a[0].number:"")')"
+    | "$JSON_GET" 'd.length ? d[0].number : ""')"
   [ -n "$pr_number" ] || { echo "release PR was created but could not be found again ($from -> $to)" >&2; exit 2; }
 fi
 
@@ -179,14 +181,12 @@ fi
   || echo "WARN could not request review from $reviewer (draft PRs sometimes refuse) — request it by hand" >&2
 
 final="$(gh pr view "$pr_number" --repo "$slug" --json url,number,isDraft)"
-node -e '
-  const fs = require("fs");
-  const [raw, action, from, to, manifestPath, assignee, reviewer] = process.argv.slice(1);
-  const pr = JSON.parse(raw);
-  const m = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
-  console.log(JSON.stringify({
+"$JSON_GET" '(() => {
+  const pr = JSON.parse(a.final);
+  const { action, from, to, assignee, reviewer } = a;
+  return {
     pr_url: pr.url, pr_number: pr.number, action, draft: pr.isDraft,
-    from, to, tasks: m.tasks ?? [], unresolved: (m.unresolved ?? []).length,
+    from, to, tasks: d.tasks ?? [], unresolved: (d.unresolved ?? []).length,
     assignee, reviewer,
-  }));
-' "$final" "$action" "$from" "$to" "$manifest" "$assignee" "$reviewer"
+  };
+})()' final="$final" action="$action" from="$from" to="$to" assignee="$assignee" reviewer="$reviewer" <"$manifest"

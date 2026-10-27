@@ -33,7 +33,7 @@ exit 0
 STUB
 cat > "$stubs/project-resolve.sh" <<'STUB'
 #!/usr/bin/env bash
-echo '{"project":"Acme","repo":"acme/odoo","repo_path":"/repos/acme","default_branch":"main","odoo_version":"18.0"}'
+echo '{"project":"Acme","repo":"acme/odoo","repo_root":"/repos/acme","base_branch":"main","odoo_version":"18.0"}'
 STUB
 cat > "$stubs/preflight.sh" <<'STUB'
 #!/usr/bin/env bash
@@ -55,16 +55,16 @@ expect "green exit" "$(STUB_ARGS_FILE="$work/args" run --target 19.0 --project A
 expect "green ok" "$(field ok)" True
 expect "green source_db" "$(field source_db)" prod_db
 expect "green repo" "$(field repo)" acme/odoo
-expect "green repo_path" "$(field repo_path)" /repos/acme
-expect "green default_branch" "$(field default_branch)" main
+expect "green repo_root" "$(field repo_root)" /repos/acme
+expect "green base_branch" "$(field base_branch)" main
 expect "green enterprise_path" "$(field enterprise_path)" "$ent"
 expect "green fingerprint length" "$(field env_fingerprint | wc -c)" 65
 contains "green stderr" "$(cat "$work/err")" "PASS ssh"
 contains "preflight args" "$(cat "$work/args")" "--soft --target-series 19.0 --custom-tree /repos/acme"
 
-# --repo-path overrides
-run --target 19.0 --project Acme --repo-path /other >/dev/null
-expect "repo-path override" "$(field repo_path)" /other
+# --repo-root overrides
+run --target 19.0 --project Acme --repo-root /other >/dev/null
+expect "repo-root override" "$(field repo_root)" /other
 
 # fingerprint moves with the enterprise HEAD
 before="$(field env_fingerprint)"

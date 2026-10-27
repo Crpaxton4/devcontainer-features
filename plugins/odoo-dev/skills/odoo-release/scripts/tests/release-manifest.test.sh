@@ -10,16 +10,13 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SUT="$(cd "$SCRIPT_DIR/.." && pwd)/release-manifest.sh"
+JSON_GET="$SCRIPT_DIR/../../../../scripts/json-get.sh"
 work="$(mktemp -d "${TMPDIR:-/tmp}/release-manifest-test.XXXXXX")"
 trap 'rm -rf "$work"' EXIT
 
 pass=0; fail=0
 expect() { if [ "$2" = "$3" ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL $1: wanted '$3', got '$2'" >&2; fi; }
-q() { node -e '
-  const j = JSON.parse(process.argv[1]);
-  const v = new Function("m", "return " + process.argv[2])(j);
-  console.log(typeof v === "object" ? JSON.stringify(v) : String(v));
-' "$1" "$2"; }
+q() { "$JSON_GET" '(m => ('"$2"'))(d)' <<<"$1"; }
 
 # ---------- stub gh -------------------------------------------------------------
 bin="$work/bin"; mkdir -p "$bin"

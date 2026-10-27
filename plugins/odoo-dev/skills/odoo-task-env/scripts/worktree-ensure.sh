@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # worktree-ensure.sh — idempotently create (or reuse) the task worktree.
 #
-# Usage: worktree-ensure.sh <repo> <task_id> <slug> <base_branch> [<resume_branch>] [--repo-path DIR]
+# Usage: worktree-ensure.sh <repo> <task_id> <slug> <base_branch> [<resume_branch>] [--repo-root DIR]
 #
 # Effects (all idempotent):
 #   - appends ".worktrees/" to the repo's .git/info/exclude (grep-before-append)
@@ -9,6 +9,8 @@
 #     origin/<base_branch> with NO upstream (--no-track), or reuses the existing
 #     worktree/branch. pr-open.sh sets the upstream with "push -u" on the first
 #     push, so a bare "git push" before that fails instead of pushing to the base.
+#     An empty <base_branch> (project-resolve.sh found no flow branch on origin)
+#     prints a warning and cuts from origin/HEAD.
 #
 # Resume: given a 5th argument, that EXACT ref is adopted instead of computing
 # "<id>-<slug>" — a human branch (<id>#<slug>) is continued rather than restarted
@@ -42,26 +44,33 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKTREE_SUBDIR="${WORKTREE_SUBDIR:-.worktrees}"
 
 usage() {
-  echo "usage: worktree-ensure.sh <repo> <task_id> <slug> <base_branch> [<resume_branch>] [--repo-path DIR]" >&2
+  echo "usage: worktree-ensure.sh <repo> <task_id> <slug> <base_branch> [<resume_branch>] [--repo-root DIR]" >&2
   exit 2
 }
 
-positional=(); repo_path=""
+positional=(); repo_root=""
 while [ $# -gt 0 ]; do
   case "$1" in
-    --repo-path) repo_path="${2:?}"; shift 2 ;;
+    --repo-root) repo_root="${2:?}"; shift 2 ;;
     --*) echo "unknown option: $1" >&2; usage ;;
     *) positional+=("$1"); shift ;;
   esac
 done
 [ "${#positional[@]}" -ge 4 ] && [ "${#positional[@]}" -le 5 ] || usage
 repo="${positional[0]}"; task_id="${positional[1]}"; slug="${positional[2]}"
-default_branch="${positional[3]}"; resume_branch="${positional[4]:-}"
+base_branch="${positional[3]}"; resume_branch="${positional[4]:-}"
 
 [ -n "$slug" ] || { echo "slug must not be empty" >&2; exit 2; }
-[ -n "$default_branch" ] || { echo "default_branch must not be empty" >&2; exit 2; }
 
-repo_dir="$(resolve_repo_dir "$repo" "$repo_path")" || exit 2
+# An empty base_branch is what project-resolve.sh prints when no branch of the
+# flow exists on origin: warn and cut from origin/HEAD instead of stopping.
+fetch_args=("$base_branch"); base_ref="origin/$base_branch"
+if [ -z "$base_branch" ]; then
+  echo "WARN base_branch is empty (no branch of the flow exists on origin): cutting from origin/HEAD" >&2
+  fetch_args=(); base_ref="origin/HEAD"
+fi
+
+repo_dir="$(resolve_repo_dir "$repo" "$repo_root")" || exit 2
 
 wt="$repo_dir/$WORKTREE_SUBDIR/task-$task_id"
 
@@ -89,7 +98,7 @@ elif [ -n "$resume_branch" ]; then
   # commits already on it are the work this run is continuing.
   branch="$resume_branch"
   [ -e "$wt" ] && { echo "path exists but is not a registered worktree: $wt" >&2; exit 2; }
-  git -C "$repo_dir" fetch origin "$default_branch"
+  git -C "$repo_dir" fetch origin "${fetch_args[@]}"
   if git -C "$repo_dir" show-ref --verify --quiet "refs/heads/$branch"; then
     git -C "$repo_dir" worktree add "$wt" "$branch"
   elif git -C "$repo_dir" show-ref --verify --quiet "refs/remotes/origin/$branch"; then
@@ -102,11 +111,11 @@ elif [ -n "$resume_branch" ]; then
 else
   branch="$task_id-$slug"
   [ -e "$wt" ] && { echo "path exists but is not a registered worktree: $wt" >&2; exit 2; }
-  git -C "$repo_dir" fetch origin "$default_branch"
+  git -C "$repo_dir" fetch origin "${fetch_args[@]}"
   if git -C "$repo_dir" show-ref --verify --quiet "refs/heads/$branch"; then
     git -C "$repo_dir" worktree add "$wt" "$branch"
   else
-    git -C "$repo_dir" worktree add --no-track "$wt" -b "$branch" "origin/$default_branch"
+    git -C "$repo_dir" worktree add --no-track "$wt" -b "$branch" "$base_ref"
   fi
   status="created"
 fi
@@ -114,7 +123,5 @@ fi
 flock -u 9
 exec 9>&-
 
-node -e '
-  const [wt, branch, status] = process.argv.slice(1);
-  console.log(JSON.stringify({ worktree: wt, branch, status }));
-' "$wt" "$branch" "$status"
+"$SCRIPT_DIR/../../../scripts/json-get.sh" '({ worktree: a.wt, branch: a.branch, status: a.status })' \
+  wt="$wt" branch="$branch" status="$status" <<<'{}'

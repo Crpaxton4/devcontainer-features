@@ -15,20 +15,21 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SUT="$(cd "$SCRIPT_DIR/.." && pwd)/run-tests.sh"
+JSON_GET="$SCRIPT_DIR/../../../../scripts/json-get.sh"
 work="$(mktemp -d "${TMPDIR:-/tmp}/run-tests-test.XXXXXX")"
 trap 'rm -rf "$work"' EXIT
 
 pass=0; fail=0
 expect() { if [ "$2" = "$3" ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL $1: wanted '$3', got '$2'" >&2; fi; }
-field() { node -e 'console.log(String(JSON.parse(process.argv[1])[process.argv[2]] ?? "null"))' "$1" "$2"; }
-nfail() { node -e 'console.log(JSON.parse(process.argv[1]).failures.length)' "$1"; }
-firsterr() { node -e 'const f=JSON.parse(process.argv[1]).failures[0];console.log(f?f.error:"")' "$1"; }
+field() { "$JSON_GET" 'd[a.k] ?? "null"' k="$2" <<<"$1"; }
+nfail() { "$JSON_GET" d.failures.length <<<"$1"; }
+firsterr() { "$JSON_GET" 'd.failures[0] ? d.failures[0].error : ""' <<<"$1"; }
 # The whole key set, sorted: the series-mismatch refusal emits its JSON from its
 # own code path, so the suite — not a reader downstream — is what keeps the two
 # shapes identical.
-keys() { node -e 'console.log(Object.keys(JSON.parse(process.argv[1])).sort().join(","))' "$1"; }
+keys() { "$JSON_GET" 'Object.keys(d).sort().join(",")' <<<"$1"; }
 # suites is the per-module tally; "mod_a:2/2/0" reads collected/executed/failed.
-suites() { node -e 'console.log(JSON.parse(process.argv[1]).suites.map(s=>`${s.module}:${s.collected}/${s.executed}/${s.failed}`).join(" "))' "$1"; }
+suites() { "$JSON_GET" 'd.suites.map(s=>`${s.module}:${s.collected}/${s.executed}/${s.failed}`).join(" ")' <<<"$1"; }
 # The stub records one argv entry per line, so a fixed-string line match is an
 # exact assertion about what Odoo was actually invoked with.
 argv_has() { grep -qxF -- "$1" "$work/args" && echo yes || echo no; }
@@ -78,7 +79,7 @@ conf="$work/odoo.conf"
 printf '[options]\naddons_path = %s/poison-from-conf\n' "$work" > "$conf"
 mkdir -p "$work/addons" "$work/poison-from-conf"
 # The task worktree must exist for run() to pick it (#1171); a missing one falls
-# through to --repo-path and the addons base, which the cases below exercise.
+# through to --repo-root and the addons base, which the cases below exercise.
 mkdir -p "$work/addons/.worktrees/task-4242"
 
 run() { # run <log-fixture> <rc> [extra args...]
@@ -218,14 +219,14 @@ expect "worktree wins and is the reported root" "$(field "$out" addons_root)" "$
 expect "no enterprise by default" "$(field "$out" enterprise_addons)" "null"
 
 mkdir -p "$work/repo/mymodule" "$work/emptybase"
-out="$(run9 "$work/emptybase" --repo-path "$work/repo")"
-expect "no worktree: --repo-path holding the module is the root" "$(field "$out" addons_root)" "$work/repo"
-expect "no worktree: --repo-path leads the addons path" \
+out="$(run9 "$work/emptybase" --repo-root "$work/repo")"
+expect "no worktree: --repo-root holding the module is the root" "$(field "$out" addons_root)" "$work/repo"
+expect "no worktree: --repo-root leads the addons path" \
   "$(argv_has "--addons-path=$work/repo,$work/core-addons")" "yes"
 
 mkdir -p "$work/base2/mymodule"
 out="$(run9 "$work/base2")"
-expect "no worktree, no repo-path: the addons base holding the module" "$(field "$out" addons_root)" "$work/base2"
+expect "no worktree, no repo-root: the addons base holding the module" "$(field "$out" addons_root)" "$work/base2"
 
 rc=0
 PATH="$bin:$PATH" ODOO_RC="$conf" ODOO_FAKE_LOG="$green" ODOO_FAKE_ARGS="$work/args" \
@@ -541,7 +542,7 @@ cat > "$t17f" <<'LOG'
 2026-09-04 16:48:29,622 1 INFO db odoo.tests.result: 0 failed, 0 error(s) of 1 tests when loading database 'db'
 LOG
 out="$(run "$t17f" 0)"
-expect "17: failed tour is a failure entry" "$(node -e 'console.log(JSON.parse(process.argv[1]).failures.filter(f=>/Tour my_tour failed at step/.test(f.error)).length)' "$out")" "1"
+expect "17: failed tour is a failure entry" "$("$JSON_GET" 'd.failures.filter(f=>/Tour my_tour failed at step/.test(f.error)).length' <<<"$out")" "1"
 expect "17: failed tour is not a pass"      "$(field "$out" passed)" "false"
 rm -rf "$work/addons/.worktrees/task-4242/mymodule/tests"
 cat > "$work/addons/.worktrees/task-4242/mymodule/test_tour.py" <<'PY'
@@ -612,12 +613,12 @@ out="$(run "$green" 0 --put "$putdir")"
 expect "--put still prints the JSON on stdout" "$(field "$out" passed)" "true"
 [ -f "$putdir/task.json" ]
 expect "--put creates task.json" "$?" "0"
-entry="$(node -e 'const o=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));console.log(JSON.stringify(o.test.mymodule))' "$putdir/task.json" 2>/dev/null)"
+entry="$("$JSON_GET" d.test.mymodule <"$putdir/task.json" 2>/dev/null)"
 expect "--put lands the run under test.<module>" "$(field "$entry" produced_by)" "run-tests.sh"
 expect "--put stores the verdict verbatim"       "$(field "$entry" tests_run)" "2"
 # A series mismatch goes through the same path, so the refusal is on disk too.
 run "$green" 0 --target-series 17.0 --put "$putdir" >/dev/null
-entry="$(node -e 'const o=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));console.log(JSON.stringify(o.test.mymodule))' "$putdir/task.json" 2>/dev/null)"
+entry="$("$JSON_GET" d.test.mymodule <"$putdir/task.json" 2>/dev/null)"
 expect "--put records a series mismatch as the latest entry" "$(field "$entry" status)" "series_mismatch"
 
 # A write that cannot happen is exit 7 with the reason on stderr, never a silent

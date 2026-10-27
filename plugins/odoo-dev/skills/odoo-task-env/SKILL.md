@@ -11,22 +11,26 @@ Three questions, in this order, each answered by one script:
 2. Do the worktree and the branch exist? (create or reuse, never a second one)
 3. Is an Odoo stack running? (reuse, restart or create, never a second one)
 
-Inputs: `repo`, `base_branch` and `odoo_version` from the resolved project; the
-`task_id`; a `slug` from the task name. `base_branch` is the base for every step. It is
-the `<default_branch>` argument of the scripts below.
+Inputs: `repo`, `repo_root`, `base_branch` and `odoo_version` from the resolved project;
+the `task_id`; a `slug` from the task name. `base_branch` is the base for every step. It
+is the `<base_branch>` argument of the scripts below. When `project-resolve.sh` prints a
+null `base_branch` (no branch of the flow exists on `origin`), pass an empty string:
+`existing-work.sh` and `worktree-ensure.sh` print a warning and use `origin/HEAD`. A
+repo with no repo-map entry is a warning, not a stop: use `repo_root` and `origin`
+from the resolver.
 
 ## Where this runs
 
 | Context | Repos tree | Worktrees | Stacks |
 |---|---|---|---|
 | Host | `$REPOS_DIR/<repo>` | yes | `stack-ensure.sh` manages docker |
-| Devcontainer | not visible; the checkout is bind-mounted at `/mnt/extra-addons` | yes, pass `--repo-path /mnt/extra-addons` | already inside one; docker may be on PATH, `odoo` + postgres decide |
+| Devcontainer | not visible; the checkout is bind-mounted at `/mnt/extra-addons` | yes, pass `--repo-root /mnt/extra-addons` | already inside one; docker may be on PATH, `odoo` + postgres decide |
 
 The context is detected container first: `odoo` on PATH and `pg_isready` answering
 means devcontainer, whether or not `docker` is on PATH (the devcontainer mounts the
 host socket). Only then is `docker` checked for host.
 
-Every script takes `--repo-path DIR` to bypass repos-tree resolution. Inside the
+Every script takes `--repo-root DIR` to bypass repos-tree resolution. Inside the
 devcontainer it is required.
 
 ## Scripts
@@ -51,7 +55,7 @@ failure, 0 with `--soft`.
 ### 1. Existing work
 
 ```bash
-<base directory>/scripts/existing-work.sh <repo> <task_id> <default_branch> [--repo-path DIR]
+<base directory>/scripts/existing-work.sh <repo> <task_id> <base_branch> [--repo-root DIR]
 ```
 
 → `{"state","branch","candidates":[...],"prs":[...],"gh_error"}`
@@ -69,7 +73,7 @@ failure, 0 with `--soft`.
 ### 2. Worktree and branch
 
 ```bash
-<base directory>/scripts/worktree-ensure.sh <repo> <task_id> <slug> <base_branch> [<resume_branch>] [--repo-path DIR]
+<base directory>/scripts/worktree-ensure.sh <repo> <task_id> <slug> <base_branch> [<resume_branch>] [--repo-root DIR]
 ```
 
 → `{"worktree","branch","status":"created"|"reused"}`
@@ -84,7 +88,7 @@ failure, 0 with `--soft`.
 ### 3. Stack
 
 ```bash
-<base directory>/scripts/stack-ensure.sh <repo> [--target-series NN.0] [--repo-path DIR]
+<base directory>/scripts/stack-ensure.sh <repo> [--target-series NN.0] [--repo-root DIR]
 ```
 
 → `{"stack","status":"reused"|"restarted"|"created"|"in-container","stopped_lru":[]}`
@@ -98,7 +102,7 @@ failure, 0 with `--soft`.
   it, `[]` when none. With `--target-series`, a disagreement with the core's major adds
   `"series_mismatch": true` and a `warning`; the exit is still 0. A side core for the
   target series means `run-tests.sh` can still run it.
-- `--repo-path DIR` is the repo checkout on the host (replaces `$REPOS_DIR/<repo>`);
+- `--repo-root DIR` is the repo checkout on the host (replaces `$REPOS_DIR/<repo>`);
   in a container it is accepted and ignored.
 - Every exit path prints one JSON line and exits 0, or prints an error on stderr and
   exits non-zero. Exit 0 always comes with JSON: if you see none, your pipe (for
@@ -106,7 +110,7 @@ failure, 0 with `--soft`.
 - `exit 5` — neither a working Odoo container (`odoo` on PATH and `pg_isready`
   answering) nor docker → stop; you are in the wrong place.
 - `exit 2` — usage, or on the host the repos tree cannot be resolved (the message names
-  `--repo-path` and `REPOS_DIR`), or the repo directory is missing → stop; fix the call.
+  `--repo-root` and `REPOS_DIR`), or the repo directory is missing → stop; fix the call.
 - Never point it at a worktree path. That mints a second compose project for the repo.
 
 ## Re-run
@@ -119,6 +123,7 @@ failure, 0 with `--soft`.
 
 | Variable | Default | Why you would change it |
 |---|---|---|
+| `ODOO_DEV_HOME` | `$HOME/.config/odoo-dev` | The state root: the repo map and `tasks/<id>/`. `<plugin root>/scripts/state-dir.sh` is the one script that resolves it. `odoo-dev doctor --migrate` sets it up once |
 | `REPOS_DIR` | resolved by `repos-dir.sh` | Non-standard repos tree. A tree with one clone declares itself with `touch <tree>/.odoo-repos-dir` |
 | `WORKTREE_SUBDIR` | `.worktrees` | Worktrees live elsewhere in this repo |
 | `ODOO_ACTIVE_REPOS` | empty | Protect in-use stacks from LRU eviction |

@@ -13,7 +13,7 @@ Below: what Odoo work add on top.
 
 ## Base branch comes from the repo map, never from GitHub
 
-GitHub default branch routinely *not* where task PR belongs. Seen in a live client repo: GitHub default `Odoov18` while PRs target `staging`. Take base from `odoo-dev:odoo-repo-map` `default_branch` (validated against project `branch_flow`) and pass explicit. `gh pr create` without `--base` silently target GitHub default.
+GitHub default branch routinely *not* where task PR belongs. Seen in a live client repo: GitHub default `Odoov18` while PRs target `staging`. Take base from `odoo-dev:odoo-repo-map` `base_branch` (the first element of the project's `branch_flow` after `task` that exists on `origin`) and pass explicit. `gh pr create` without `--base` silently target GitHub default.
 
 ## One module per PR where possible
 
