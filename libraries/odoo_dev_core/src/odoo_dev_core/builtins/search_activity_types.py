@@ -1,0 +1,45 @@
+"""Search the ``mail.activity.type`` records available for scheduling."""
+
+from dataclasses import dataclass
+from typing import Any, Optional
+from odoo_dev_core.services.activities import (
+    DEFAULT_ACTIVITY_TYPE_LIMIT,
+    search_activity_types,
+)
+
+from ..ports import Services
+from ..registry import command
+
+
+@dataclass(frozen=True)
+class Args:
+    query: Optional[str] = None
+    res_model: Optional[str] = None
+    limit: int = DEFAULT_ACTIVITY_TYPE_LIMIT
+
+
+@command(
+    "search_activity_types",
+    args=Args,
+    description="List the Odoo activity types (mail.activity.type) available for "
+    "scheduling — 'To Do', 'Call', 'Meeting', 'Email', plus whatever the "
+    "database defines — ordered by name (read-only). The discovery "
+    "counterpart to schedule_activity's 'activity_type' parameter, which "
+    "also accepts a name directly; call this when the exact spelling is "
+    "unknown or a name came back ambiguous. 'query' is a case-insensitive "
+    "substring match on the type name; 'res_model' narrows the list to the "
+    "types applicable to that document type (the generic types plus any "
+    "scoped to exactly that model). Each result carries id, name, and "
+    "res_model (null for a generic type).",
+)
+def handle(services: Services, args: Args) -> list[dict[str, Any]]:
+    """Return the activity types matching ``query``/``res_model``.
+
+    :param query: Case-insensitive substring matched against the type name.
+    :param res_model: Restrict to types applicable to this model.
+    :param limit: Maximum number of types to return.
+    :return: ``{"id", "name", "res_model"}`` dicts, name-ordered.
+    """
+    return search_activity_types(
+        services.client, query=args.query, res_model=args.res_model, limit=args.limit
+    )

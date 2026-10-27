@@ -10,9 +10,9 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import MagicMock, Mock, patch
 
-from odoo_dev_core.commands.command_registry import Registry
 from odoo_mcp import server
 from odoo_mcp.server import OdooMCPServer, _to_toon, _toon_output_enabled
+from ..support import make_service
 
 
 def _dict_tool() -> dict:
@@ -37,7 +37,7 @@ async def _async_dict_tool() -> dict:
 
 def _build_added(name, tool_fn):
     """Register one explicit tool and return the resulting FastMCP ``Tool``."""
-    registry = Registry(Mock())
+    registry = make_service(client=Mock())
     mock_mcp = MagicMock()
     added = []
     mock_mcp.add_tool.side_effect = added.append
@@ -142,7 +142,7 @@ class TestToonComposesWithProfiling(unittest.TestCase):
     """TOON output and cProfile profiling wrap the same tool and compose."""
 
     def test_both_wrappers_apply_when_enabled(self):
-        registry = Registry(Mock())
+        registry = make_service(client=Mock())
         mock_mcp = MagicMock()
         added = []
         mock_mcp.add_tool.side_effect = added.append

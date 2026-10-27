@@ -12,9 +12,9 @@ from typing import Any
 from unittest.mock import patch
 
 from odoo_client.client import OdooClient
-from odoo_dev_core.commands.builtin.task_aging import TaskAgingCommand
 from odoo_client.transport.executor import OdooExecutor
 from odoo_dev_core.services.odoo_helpers import get_task_aging
+from ..fakes import service
 
 # Fixed reference "now" for deterministic day arithmetic.
 _NOW = datetime(2026, 7, 12, tzinfo=timezone.utc)
@@ -197,10 +197,10 @@ class TestTaskAgingCommand(unittest.TestCase):
     def test_delegates_with_defaults(self):
         client = object()
         with patch(
-            "odoo_dev_core.commands.builtin.task_aging.get_task_aging",
+            "odoo_dev_core.builtins.task_aging.get_task_aging",
             return_value=[],
         ) as mock_helper:
-            result = TaskAgingCommand(client).execute()
+            result = service(client=client).execute("task_aging")
         mock_helper.assert_called_once_with(
             client, project_id=None, stage=None, limit=20
         )
@@ -210,11 +210,11 @@ class TestTaskAgingCommand(unittest.TestCase):
         client = object()
         expected = [{"task_id": 1, "days_in_stage": 5}]
         with patch(
-            "odoo_dev_core.commands.builtin.task_aging.get_task_aging",
+            "odoo_dev_core.builtins.task_aging.get_task_aging",
             return_value=expected,
         ) as mock_helper:
-            result = TaskAgingCommand(client).execute(
-                project_id=3, stage="review", limit=5
+            result = service(client=client).execute(
+                "task_aging", project_id=3, stage="review", limit=5
             )
         mock_helper.assert_called_once_with(
             client, project_id=3, stage="review", limit=5

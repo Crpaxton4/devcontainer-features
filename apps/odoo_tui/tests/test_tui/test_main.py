@@ -1,6 +1,6 @@
 """Tests for the ``odoo-tui`` console entry point.
 
-The entry point wires the default registry and hands it to the Textual driver;
+The entry point wires the default command service and hands it to the Textual driver;
 the driver itself is patched out so the test never opens a terminal. This mirrors
 the MCP ``__main__`` entry-point test and covers the module's imports.
 """
@@ -8,7 +8,7 @@ the MCP ``__main__`` entry-point test and covers the module's imports.
 import unittest
 from unittest.mock import patch
 
-from odoo_dev_core.commands.builtin import BUILTIN_COMMANDS
+from odoo_dev_core import default_registry
 from odoo_tui import __main__ as entry
 
 
@@ -28,7 +28,7 @@ class TestMainEntryPoint(unittest.TestCase):
 
         self.guard.assert_called_once_with()
 
-    def test_main_builds_default_registry_and_runs(self):
+    def test_main_builds_default_service_and_runs(self):
         with (
             patch("odoo_tui.__main__.build_client") as MockClient,
             patch("odoo_tui.__main__.run") as mock_run,
@@ -47,11 +47,10 @@ class TestMainEntryPoint(unittest.TestCase):
         ):
             entry.main()
 
-        # The driver now receives an injected ``TuiDeps`` bundle; its registry
+        # The driver receives an injected ``TuiDeps`` bundle; its service
         # carries every built-in command.
         deps = mock_run.call_args.args[0]
-        registered = [name for name, _ in deps.registry.items()]
-        self.assertEqual(set(registered), set(BUILTIN_COMMANDS))
+        self.assertEqual(deps.service.registry.ids(), default_registry().ids())
 
 
 if __name__ == "__main__":

@@ -13,17 +13,18 @@ import inspect
 import unittest
 from unittest.mock import MagicMock, Mock, patch
 
-from odoo_dev_core.commands import Registry
-from odoo_dev_core.commands.builtin import BUILTIN_COMMANDS
+from odoo_dev_core import default_registry, telemetry
+from odoo_dev_core.telemetry import READ_TASK_IDS_PAYLOAD_KEY
 from odoo_mcp import server as server_mod
-from odoo_mcp.server import READ_TASK_IDS_PAYLOAD_KEY, OdooMCPServer
+from odoo_mcp.server import OdooMCPServer
 from odoo_dev_data.events import EventStore
 from ..support import make_event_store
+from ..support import make_service
 
-#: Patch targets for the best-effort git lookups ``LogEventCommand`` performs
+#: Patch targets for the best-effort git lookups the ``log_event`` command performs
 #: when a caller leaves ``repo``/``branch`` unstated (#509).
-REPO_LABEL = "odoo_dev_core.commands.log_event.current_repo_label"
-BRANCH_LABEL = "odoo_dev_core.commands.log_event.current_branch_label"
+REPO_LABEL = "odoo_dev_core.builtins.log_event.current_repo_label"
+BRANCH_LABEL = "odoo_dev_core.builtins.log_event.current_branch_label"
 
 
 def _tmp_db() -> EventStore:
@@ -43,7 +44,7 @@ def _build_tools(registry, explicit_tools):
 class TestDispatchEmitsEvent(unittest.TestCase):
     def test_mutating_tool_with_task_id_emits_one_event(self):
         db = _tmp_db()
-        registry = Registry(Mock(), state_client=db)
+        registry = make_service(db, Mock())
 
         def task_note(task_id: int, task_name: str) -> dict:
             """Fake tool."""
@@ -80,7 +81,7 @@ class TestDispatchEmitsEvent(unittest.TestCase):
         # ``get_task`` minted a derived session on that task and the 0.25 h
         # min-session floor billed it. The id is now payload evidence only.
         db = _tmp_db()
-        registry = Registry(Mock(), state_client=db)
+        registry = make_service(db, Mock())
 
         def get_task(task_id: int) -> dict:
             """Fake tool."""
@@ -105,7 +106,7 @@ class TestDispatchEmitsEvent(unittest.TestCase):
         # The key is omitted rather than written empty, so a read of a
         # non-task argument leaves the historical payload shape untouched.
         db = _tmp_db()
-        registry = Registry(Mock(), state_client=db)
+        registry = make_service(db, Mock())
 
         def get_task(task_id: str) -> dict:
             """Fake tool."""
@@ -121,7 +122,7 @@ class TestDispatchEmitsEvent(unittest.TestCase):
 
     def test_tool_without_task_id_and_no_active_run_is_untargeted(self):
         db = _tmp_db()
-        registry = Registry(Mock(), state_client=db)
+        registry = make_service(db, Mock())
 
         def ping(message: str) -> str:
             """Fake tool."""
@@ -143,7 +144,7 @@ class TestDispatchEmitsEvent(unittest.TestCase):
 
     def test_explicit_task_id_is_attributed(self):
         db = _tmp_db()
-        registry = Registry(Mock(), state_client=db)
+        registry = make_service(db, Mock())
 
         def task_note(task_id: int) -> dict:
             """Fake tool."""
@@ -159,7 +160,7 @@ class TestDispatchEmitsEvent(unittest.TestCase):
         # could ever be traced to the code that produced it and every derived
         # session fell back to the repo-less sentinel.
         db = _tmp_db()
-        registry = Registry(Mock(), state_client=db)
+        registry = make_service(db, Mock())
 
         def ping() -> str:
             """Fake tool."""
@@ -181,7 +182,7 @@ class TestDispatchEmitsEvent(unittest.TestCase):
         # queries must never reach the local events store -- only the tool name
         # (+ task scope) is recorded.
         db = _tmp_db()
-        registry = Registry(Mock(), state_client=db)
+        registry = make_service(db, Mock())
         secret = "expired coupons leak PII to the checkout log"
 
         def task_question(task_id: int, question: str) -> dict:
@@ -211,7 +212,7 @@ class TestDispatchEmitsEvent(unittest.TestCase):
 
     def test_raising_tool_emits_no_event(self):
         db = _tmp_db()
-        registry = Registry(Mock(), state_client=db)
+        registry = make_service(db, Mock())
 
         def boom(task_id: int) -> dict:
             """Fake tool."""
@@ -227,7 +228,7 @@ class TestDispatchEmitsEvent(unittest.TestCase):
 
     def test_async_tool_emits_event(self):
         db = _tmp_db()
-        registry = Registry(Mock(), state_client=db)
+        registry = make_service(db, Mock())
 
         async def task_note(task_id: int, note: str) -> dict:
             """Fake tool."""
@@ -263,7 +264,7 @@ class TestDispatchEmitsEvent(unittest.TestCase):
         )
 
         db = _tmp_db()
-        registry = Registry(Mock(), state_client=db)
+        registry = make_service(db, Mock())
         ask = InputRequiredResult(
             input_requests={
                 "branch_description": CreateMessageRequest(
@@ -295,7 +296,7 @@ class TestDispatchEmitsEvent(unittest.TestCase):
             def add_event(self, event):
                 raise RuntimeError("db down")
 
-        registry = Registry(Mock(), state_client=BoomState())
+        registry = make_service(BoomState(), Mock())
 
         def do_thing(task_id: int) -> dict:
             """Fake tool."""
@@ -307,7 +308,7 @@ class TestDispatchEmitsEvent(unittest.TestCase):
 
     def test_signature_preserved_through_chain(self):
         db = _tmp_db()
-        registry = Registry(Mock(), state_client=db)
+        registry = make_service(db, Mock())
 
         def do_thing(task_id: int, task_name: str = "x") -> dict:
             """Fake tool."""
@@ -319,29 +320,13 @@ class TestDispatchEmitsEvent(unittest.TestCase):
             inspect.signature(do_thing),
         )
 
-    def test_state_client_resolved_at_call_time_not_registration(self):
-        # Register with no state store supplied, then inject one AFTER building
-        # the server: the wrapper must resolve ``registry.state_client`` at call
-        # time, so the injected store still receives the event.
-        registry = Registry(Mock())
-
-        def do_thing(task_id: int) -> dict:
-            """Fake tool."""
-            return {"ok": task_id}
-
-        tools = _build_tools(registry, {"do_thing": do_thing})
-        db = _tmp_db()
-        registry._state_client = db
-        tools["do_thing"].fn(task_id=9)
-        self.assertEqual(len(db.get_events()), 1)
-
 
 class TestPayloadEnrichment(unittest.TestCase):
     """The #626 payload shape: reconstructable identifiers, never free text."""
 
     def test_identifier_fields_lifted_from_result(self):
         db = _tmp_db()
-        registry = Registry(Mock(), state_client=db)
+        registry = make_service(db, Mock())
 
         def create_task(task_id: int) -> dict:
             """Fake tool."""
@@ -371,7 +356,7 @@ class TestPayloadEnrichment(unittest.TestCase):
 
     def test_none_and_non_scalar_result_fields_are_omitted(self):
         db = _tmp_db()
-        registry = Registry(Mock(), state_client=db)
+        registry = make_service(db, Mock())
 
         def do_thing(task_id: int) -> dict:
             """Fake tool."""
@@ -393,7 +378,7 @@ class TestPayloadEnrichment(unittest.TestCase):
         # The wrapper only fires on a successful dispatch, but a tool handing
         # back a structured {"error": ...} payload is an outcome worth auditing.
         db = _tmp_db()
-        registry = Registry(Mock(), state_client=db)
+        registry = make_service(db, Mock())
 
         def do_thing(task_id: int) -> dict:
             """Fake tool."""
@@ -405,16 +390,16 @@ class TestPayloadEnrichment(unittest.TestCase):
         self.assertEqual(db.get_events()[0].payload["outcome"], "error: bad input")
 
     def test_outcome_line_variants(self):
-        self.assertEqual(server_mod._outcome_line({"ok": True}), "ok")
-        self.assertEqual(server_mod._outcome_line("plain string"), "ok")
-        self.assertEqual(server_mod._outcome_line(None), "ok")
-        self.assertEqual(server_mod._outcome_line({"error": "boom"}), "error: boom")
-        self.assertEqual(server_mod._outcome_line({"error": {}}), "error")
+        self.assertEqual(telemetry.outcome_line({"ok": True}), "ok")
+        self.assertEqual(telemetry.outcome_line("plain string"), "ok")
+        self.assertEqual(telemetry.outcome_line(None), "ok")
+        self.assertEqual(telemetry.outcome_line({"error": "boom"}), "error: boom")
+        self.assertEqual(telemetry.outcome_line({"error": {}}), "error")
 
     def test_result_payload_fields_ignores_non_dict(self):
-        self.assertEqual(server_mod._result_payload_fields(None), {})
-        self.assertEqual(server_mod._result_payload_fields([1, 2]), {})
-        self.assertEqual(server_mod._result_payload_fields("x"), {})
+        self.assertEqual(telemetry.result_payload_fields(None), {})
+        self.assertEqual(telemetry.result_payload_fields([1, 2]), {})
+        self.assertEqual(telemetry.result_payload_fields("x"), {})
 
 
 #: Every built-in command that must NOT attribute its event to the id it was
@@ -426,7 +411,8 @@ class TestPayloadEnrichment(unittest.TestCase):
 #: IS the billing record, so attributing them would bill the act of correcting a
 #: task's time: ``assign_event`` (the retag write), ``normalize_timesheets``, and
 #: ``resync`` (which ingests external history rather than doing work).
-#: ``get_employee_id`` only writes a local id cache.
+#: ``get_employee_id`` only writes a local id cache, and ``log_event`` and
+#: ``upload`` are CLI-only plumbing.
 _READ_TOOLS = frozenset(
     {
         "assign_event",
@@ -440,6 +426,7 @@ _READ_TOOLS = frozenset(
         "get_tasks",
         "get_todo",
         "get_uid",
+        "log_event",
         "normalize_timesheets",
         "optimize_sessions",
         "query_sessions",
@@ -457,6 +444,7 @@ _READ_TOOLS = frozenset(
         "timesheet_summary",
         "unbilled_hours",
         "unlogged_time_report",
+        "upload",
     }
 )
 
@@ -472,25 +460,25 @@ class TestAttributingToolSet(unittest.TestCase):
     """
 
     def test_sets_are_disjoint(self):
-        self.assertEqual(server_mod.ATTRIBUTING_TOOLS & _READ_TOOLS, frozenset())
+        self.assertEqual(telemetry.ATTRIBUTING_TOOLS & _READ_TOOLS, frozenset())
 
     def test_every_builtin_is_classified_exactly_once(self):
-        classified = server_mod.ATTRIBUTING_TOOLS | _READ_TOOLS
-        self.assertEqual(set(BUILTIN_COMMANDS), classified)
+        classified = telemetry.ATTRIBUTING_TOOLS | _READ_TOOLS
+        self.assertEqual(set(default_registry().ids()), classified)
 
     def test_no_classified_name_is_unknown_to_the_registry(self):
         # Catches a typo or a renamed command on either side of the partition.
-        for name in sorted(server_mod.ATTRIBUTING_TOOLS | _READ_TOOLS):
-            self.assertIn(name, BUILTIN_COMMANDS, name)
+        for name in sorted(telemetry.ATTRIBUTING_TOOLS | _READ_TOOLS):
+            self.assertIn(name, default_registry().ids(), name)
 
     def test_the_tools_the_issue_names_do_not_attribute(self):
         # The exact tools #1040 measured phantom sessions from.
         for name in ("get_task", "get_task_chatter", "get_tasks", "search_tasks"):
-            self.assertNotIn(name, server_mod.ATTRIBUTING_TOOLS, name)
+            self.assertNotIn(name, telemetry.ATTRIBUTING_TOOLS, name)
 
     def test_the_session_mutators_do_attribute(self):
         for name in ("task_note", "task_question", "create_task"):
-            self.assertIn(name, server_mod.ATTRIBUTING_TOOLS, name)
+            self.assertIn(name, telemetry.ATTRIBUTING_TOOLS, name)
 
 
 class TestEventHelpers(unittest.TestCase):
@@ -499,48 +487,42 @@ class TestEventHelpers(unittest.TestCase):
     READING = "get_task"
 
     def test_task_ids_coercible_int(self):
-        self.assertEqual(
-            server_mod._event_task_ids(self.MUTATING, {"task_id": 5}), ["5"]
-        )
+        self.assertEqual(telemetry.event_task_ids(self.MUTATING, {"task_id": 5}), ["5"])
 
     def test_task_ids_coercible_str(self):
         self.assertEqual(
-            server_mod._event_task_ids(self.MUTATING, {"task_id": "5"}), ["5"]
+            telemetry.event_task_ids(self.MUTATING, {"task_id": "5"}), ["5"]
         )
 
     def test_task_ids_absent(self):
-        self.assertEqual(server_mod._event_task_ids(self.MUTATING, {}), [])
+        self.assertEqual(telemetry.event_task_ids(self.MUTATING, {}), [])
 
     def test_task_ids_none(self):
-        self.assertEqual(
-            server_mod._event_task_ids(self.MUTATING, {"task_id": None}), []
-        )
+        self.assertEqual(telemetry.event_task_ids(self.MUTATING, {"task_id": None}), [])
 
     def test_task_ids_non_coercible(self):
         self.assertEqual(
-            server_mod._event_task_ids(self.MUTATING, {"task_id": "abc"}), []
+            telemetry.event_task_ids(self.MUTATING, {"task_id": "abc"}), []
         )
 
     def test_read_tool_yields_no_attribution_hint(self):
-        self.assertEqual(server_mod._event_task_ids(self.READING, {"task_id": 5}), [])
+        self.assertEqual(telemetry.event_task_ids(self.READING, {"task_id": 5}), [])
 
     def test_unknown_tool_yields_no_attribution_hint(self):
         # The default is NON-attributing: a tool nobody classified must not
         # silently start billing the id it was handed (#1040).
-        self.assertEqual(server_mod._event_task_ids("brand_new", {"task_id": 5}), [])
+        self.assertEqual(telemetry.event_task_ids("brand_new", {"task_id": 5}), [])
 
     def test_queried_ids_are_the_exact_complement(self):
         self.assertEqual(
-            server_mod._queried_task_ids(self.READING, {"task_id": 5}), ["5"]
+            telemetry.queried_task_ids(self.READING, {"task_id": 5}), ["5"]
         )
-        self.assertEqual(
-            server_mod._queried_task_ids(self.MUTATING, {"task_id": 5}), []
-        )
+        self.assertEqual(telemetry.queried_task_ids(self.MUTATING, {"task_id": 5}), [])
 
     def test_queried_ids_drop_a_non_task_value(self):
         for value in (None, "abc", object()):
             self.assertEqual(
-                server_mod._queried_task_ids(self.READING, {"task_id": value}), []
+                telemetry.queried_task_ids(self.READING, {"task_id": value}), []
             )
 
     def test_bound_arguments_excludes_ctx(self):

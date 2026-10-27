@@ -3,21 +3,27 @@
 import unittest
 from unittest.mock import MagicMock, patch
 
+from odoo_dev_core import CommandRegistry, CommandService, default_registry
 from odoo_mcp.tools import build_explicit_tools
+from ..support import make_service
+
+
+class _RecordingService:
+    """Stand-in ``CommandService``: returns the id and kwargs of each execute."""
+
+    def execute(self, command_id, /, **kwargs):
+        return {"id": command_id, "kwargs": kwargs}
 
 
 class TestBuildExplicitTools(unittest.TestCase):
     def test_builds_full_tool_surface(self):
-        from odoo_dev_core.commands import Registry
-        from odoo_dev_core.commands.builtin import BUILTIN_COMMANDS, register_builtins
-
-        registry = register_builtins(Registry(MagicMock()))
-        tools = build_explicit_tools(registry)
+        service = make_service(client=MagicMock())
+        tools = build_explicit_tools(service)
         # The MCP surface is a subset of the builtin surface, not a mirror of it:
         # MCP names its tools explicitly, so a builtin the LLM has no use for
         # (``get_employee_id``, used by the unattended export path) registers as
         # a command without becoming a tool (#499).
-        self.assertLessEqual(set(tools), set(BUILTIN_COMMANDS))
+        self.assertLessEqual(set(tools), set(default_registry().ids()))
         self.assertNotIn("get_employee_id", tools)
         # Every tool carries a non-empty description sourced from its command,
         # so no tool ships to the MCP wire schema without documentation.
@@ -28,11 +34,8 @@ class TestBuildExplicitTools(unittest.TestCase):
             self.assertTrue(callable(fn))
 
     def test_description_empty_when_command_missing(self):
-        class _EmptyRegistry:
-            def __getitem__(self, name):
-                raise KeyError(name)
-
-        tools = build_explicit_tools(_EmptyRegistry())
+        services = make_service(client=MagicMock()).services
+        tools = build_explicit_tools(CommandService(CommandRegistry(), services))
         # Tools are still built; descriptions default to empty string.
         _, desc = tools["get_uid"]
         self.assertEqual(desc, "")
@@ -41,15 +44,12 @@ class TestBuildExplicitTools(unittest.TestCase):
 class TestAtomicToolInvocation(unittest.TestCase):
     """Each atomic tool delegates to its like-named command's execute()."""
 
-    def _registry(self):
-        class _Reg:
-            def __getitem__(self, name):
-                cmd = MagicMock()
-                cmd.execute.side_effect = lambda *a, **k: f"{name}-result"
-                cmd.description = f"{name} description"
-                return cmd
+    def _service(self):
+        class _Service:
+            def execute(self, command_id, /, **kwargs):
+                return f"{command_id}-result"
 
-        return _Reg()
+        return _Service()
 
     def test_all_atomic_tools_route_to_command(self):
         from odoo_mcp.tools.atomic import ATOMIC_TOOL_FACTORIES
@@ -92,7 +92,7 @@ class TestAtomicToolInvocation(unittest.TestCase):
         # @atomic_tool decorator fails here instead of silently going untested.
         self.assertEqual(set(ATOMIC_TOOL_FACTORIES), set(calls))
         for name, factory in ATOMIC_TOOL_FACTORIES.items():
-            tool = factory(self._registry())
+            tool = factory(self._service())
             result = tool(*calls[name])
             self.assertEqual(result, f"{name}-result")
 
@@ -105,13 +105,7 @@ class TestGetTaskToolSchema(unittest.TestCase):
 
         from odoo_mcp.tools.atomic import make_get_task_tool
 
-        class _Reg:
-            def __getitem__(self, name):
-                cmd = MagicMock()
-                cmd.execute.side_effect = lambda *a, **k: {"task_id": a[0]}
-                return cmd
-
-        fn = make_get_task_tool(_Reg())
+        fn = make_get_task_tool(_RecordingService())
         return Tool.from_function(fn, name="get_task")
 
     def test_include_selector_in_input_schema(self):
@@ -131,19 +125,15 @@ class TestGetTaskToolSchema(unittest.TestCase):
 
     def test_task_id_only_invocation_routes(self):
         fn = make_get_task_tool_reg()
-        self.assertEqual(fn(5), {"task_id": 5})
+        self.assertEqual(
+            fn(5), {"id": "get_task", "kwargs": {"task_id": 5, "include": None}}
+        )
 
 
 def make_get_task_tool_reg():
     from odoo_mcp.tools.atomic import make_get_task_tool
 
-    class _Reg:
-        def __getitem__(self, name):
-            cmd = MagicMock()
-            cmd.execute.side_effect = lambda *a, **k: {"task_id": a[0]}
-            return cmd
-
-    return make_get_task_tool(_Reg())
+    return make_get_task_tool(_RecordingService())
 
 
 class TestGetTasksToolSchema(unittest.TestCase):
@@ -152,13 +142,7 @@ class TestGetTasksToolSchema(unittest.TestCase):
     def _make(self):
         from odoo_mcp.tools.atomic import make_get_tasks_tool
 
-        class _Reg:
-            def __getitem__(self, name):
-                cmd = MagicMock()
-                cmd.execute.side_effect = lambda *a, **k: {"args": a, "kwargs": k}
-                return cmd
-
-        return make_get_tasks_tool(_Reg())
+        return make_get_tasks_tool(_RecordingService())
 
     def _schema(self):
         from fastmcp.tools import Tool
@@ -200,13 +184,7 @@ class TestTaskNoteToolSchema(unittest.TestCase):
     def _make(self):
         from odoo_mcp.tools.atomic import make_task_note_tool
 
-        class _Reg:
-            def __getitem__(self, name):
-                cmd = MagicMock()
-                cmd.execute.side_effect = lambda *a, **k: {"args": a, "kwargs": k}
-                return cmd
-
-        return make_task_note_tool(_Reg())
+        return make_task_note_tool(_RecordingService())
 
     def _schema(self):
         from fastmcp.tools import Tool
@@ -249,10 +227,14 @@ class TestTaskNoteToolSchema(unittest.TestCase):
         fn = self._make()
         specs = [{"path": "/tmp/report.csv"}]
         result = fn(5, "note", specs)
-        self.assertEqual(result["args"], (5, "note"))
         self.assertEqual(
             result["kwargs"],
-            {"attachments": specs, "dedupe_key": None},
+            {
+                "task_id": 5,
+                "note": "note",
+                "attachments": specs,
+                "dedupe_key": None,
+            },
         )
 
     def test_dedupe_key_forwarded_to_command(self):
@@ -260,7 +242,12 @@ class TestTaskNoteToolSchema(unittest.TestCase):
         result = fn(5, "note", None, "note-abc")
         self.assertEqual(
             result["kwargs"],
-            {"attachments": None, "dedupe_key": "note-abc"},
+            {
+                "task_id": 5,
+                "note": "note",
+                "attachments": None,
+                "dedupe_key": "note-abc",
+            },
         )
 
     def test_plain_call_forwards_none_attachments(self):
@@ -268,7 +255,12 @@ class TestTaskNoteToolSchema(unittest.TestCase):
         result = fn(5, "note")
         self.assertEqual(
             result["kwargs"],
-            {"attachments": None, "dedupe_key": None},
+            {
+                "task_id": 5,
+                "note": "note",
+                "attachments": None,
+                "dedupe_key": None,
+            },
         )
 
 
@@ -278,13 +270,7 @@ class TestGetTaskChatterToolSchema(unittest.TestCase):
     def _make(self):
         from odoo_mcp.tools.atomic import make_get_task_chatter_tool
 
-        class _Reg:
-            def __getitem__(self, name):
-                cmd = MagicMock()
-                cmd.execute.side_effect = lambda *a, **k: {"args": a, "kwargs": k}
-                return cmd
-
-        return make_get_task_chatter_tool(_Reg())
+        return make_get_task_chatter_tool(_RecordingService())
 
     def _schema(self):
         from fastmcp.tools import Tool
@@ -301,13 +287,12 @@ class TestGetTaskChatterToolSchema(unittest.TestCase):
     def test_since_forwarded_to_command(self):
         fn = self._make()
         result = fn(5, 20, 77)
-        self.assertEqual(result["args"], (5,))
-        self.assertEqual(result["kwargs"], {"limit": 20, "since": 77})
+        self.assertEqual(result["kwargs"], {"task_id": 5, "limit": 20, "since": 77})
 
     def test_plain_call_forwards_none_since(self):
         fn = self._make()
         result = fn(5)
-        self.assertEqual(result["kwargs"], {"limit": 100, "since": None})
+        self.assertEqual(result["kwargs"], {"task_id": 5, "limit": 100, "since": None})
 
 
 class TestTaskQuestionToolSchema(unittest.TestCase):
@@ -316,13 +301,7 @@ class TestTaskQuestionToolSchema(unittest.TestCase):
     def _make(self):
         from odoo_mcp.tools.atomic import make_task_question_tool
 
-        class _Reg:
-            def __getitem__(self, name):
-                cmd = MagicMock()
-                cmd.execute.side_effect = lambda *a, **k: {"args": a, "kwargs": k}
-                return cmd
-
-        return make_task_question_tool(_Reg())
+        return make_task_question_tool(_RecordingService())
 
     def _schema(self):
         from fastmcp.tools import Tool
@@ -338,13 +317,17 @@ class TestTaskQuestionToolSchema(unittest.TestCase):
     def test_dedupe_key_forwarded_to_command(self):
         fn = self._make()
         result = fn(5, "q?", "q-abc")
-        self.assertEqual(result["args"], (5, "q?"))
-        self.assertEqual(result["kwargs"], {"dedupe_key": "q-abc"})
+        self.assertEqual(
+            result["kwargs"],
+            {"task_id": 5, "question": "q?", "dedupe_key": "q-abc"},
+        )
 
     def test_plain_call_forwards_none_dedupe_key(self):
         fn = self._make()
         result = fn(5, "q?")
-        self.assertEqual(result["kwargs"], {"dedupe_key": None})
+        self.assertEqual(
+            result["kwargs"], {"task_id": 5, "question": "q?", "dedupe_key": None}
+        )
 
 
 class TestAtomicToolDecorator(unittest.TestCase):
@@ -353,7 +336,7 @@ class TestAtomicToolDecorator(unittest.TestCase):
     def test_registers_factory_under_explicit_name(self):
         from odoo_mcp.tools.atomic import ATOMIC_TOOL_FACTORIES, atomic_tool
 
-        def _factory(registry):  # pragma: no cover - never invoked
+        def _factory(service):  # pragma: no cover - never invoked
             return lambda: None
 
         # patch.dict restores ATOMIC_TOOL_FACTORIES after the block so the probe
@@ -369,8 +352,8 @@ class TestAtomicToolDecorator(unittest.TestCase):
         # The explicit tool name may differ from the command the body looks up.
         from odoo_mcp.tools.atomic import ATOMIC_TOOL_FACTORIES, atomic_tool
 
-        def _factory(registry):  # pragma: no cover - never invoked
-            return lambda: registry["backing_command"].execute()
+        def _factory(service):  # pragma: no cover - never invoked
+            return lambda: service.execute("backing_command")
 
         with patch.dict(ATOMIC_TOOL_FACTORIES, clear=False):
             atomic_tool("public_alias")(_factory)
@@ -380,7 +363,7 @@ class TestAtomicToolDecorator(unittest.TestCase):
     def test_duplicate_name_raises(self):
         from odoo_mcp.tools.atomic import ATOMIC_TOOL_FACTORIES, atomic_tool
 
-        def _factory(registry):  # pragma: no cover - never invoked
+        def _factory(service):  # pragma: no cover - never invoked
             return lambda: None
 
         original = ATOMIC_TOOL_FACTORIES["get_uid"]

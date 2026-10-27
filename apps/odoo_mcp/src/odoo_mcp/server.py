@@ -17,25 +17,13 @@ from fastmcp.tools import Tool
 from mcp.types import InputRequiredResult
 
 from odoo_client._utils import declare_usage, record_usage
-from odoo_dev_core.commands import Registry
+from odoo_dev_core import CommandService
 
-# Re-imported under their historical module attributes (#713): the dispatch
-# boundary vocabulary and telemetry emitter moved to the core layer
-# (odoo_dev_core.commands.dispatch_telemetry) so the CLI ``cmd`` dispatcher can share
-# them without importing a surface, while every existing patch target on this
-# module (``odoo_mcp.server._emit_tool_event`` and friends) keeps working.
-from odoo_dev_core.commands.dispatch_telemetry import (  # noqa: F401
-    ATTRIBUTING_TOOLS,
-    READ_TASK_IDS_PAYLOAD_KEY,
-    _BOUNDARY_ERRORS,
-    _RESULT_PAYLOAD_KEYS,
-    _emit_tool_event,
-    _error_payload,
-    _event_task_ids,
-    _is_dispatched_run,
-    _outcome_line,
-    _queried_task_ids,
-    _result_payload_fields,
+from odoo_dev_core.telemetry import (
+    BOUNDARY_ERRORS,
+    emit_tool_event,
+    error_payload,
+    is_dispatched_run,
 )
 
 log = logging.getLogger(__name__)
@@ -202,13 +190,13 @@ def _toon_encoded(tool_fn: Callable[..., Any]) -> Callable[..., Any]:
 def _error_boundary(tool_fn: Callable[..., Any]) -> Callable[..., Any]:
     """Wrap a tool callable so caller-actionable failures return a payload.
 
-    Exceptions listed in :data:`_BOUNDARY_ERRORS` are converted into one
+    Exceptions listed in :data:`~odoo_dev_core.telemetry.BOUNDARY_ERRORS` are converted into one
     predictable ``{"error": {"type", "message"}}`` shape so LLM callers always
     see structured data instead of a stack trace; programming errors propagate
     unchanged. Applied inside :func:`_toon_encoded` so the error payload is TOON
     encoded like any other result.
     """
-    return _wrap_tool(tool_fn, catch=_BOUNDARY_ERRORS, on_error=_error_payload)
+    return _wrap_tool(tool_fn, catch=BOUNDARY_ERRORS, on_error=error_payload)
 
 
 def _bound_arguments(
@@ -222,7 +210,7 @@ def _bound_arguments(
 
 
 def _event_emitting(
-    tool_fn: Callable[..., Any], name: str, registry: Registry
+    tool_fn: Callable[..., Any], name: str, service: CommandService
 ) -> Callable[..., Any]:
     """Wrap a tool callable so a *successful* dispatch emits one agent event.
 
@@ -231,16 +219,14 @@ def _event_emitting(
     returns — an exception propagates outward, past the emit, and no event is
     recorded. An input-required result (the SEP-2322 ask leg, #664) likewise
     emits nothing: the tool has done no work yet, so the continuation leg is
-    the one dispatch that records the single event. The state store is resolved
-    from ``registry.state_client`` at call time (never at registration), so
-    building a server never forces the SQLite database into existence and a
-    test can inject a fake. The emit is guarded by ``try/except`` because
-    telemetry must never break a tool call.
+    the one dispatch that records the single event. The event goes through the
+    service's ``log_event`` command. The emit is guarded by ``try/except``
+    because telemetry must never break a tool call.
     """
     signature = inspect.signature(tool_fn)
 
     def emit(result: Any, args: tuple, kwargs: dict) -> None:
-        if _is_dispatched_run():
+        if is_dispatched_run(service.services.env):
             # A dispatched run is measured by the run record (#1065): the
             # dispatcher holds the clock and the task, so no event is written.
             return
@@ -251,8 +237,8 @@ def _event_emitting(
             # invocation emits the dispatch's single event.
             return
         try:
-            _emit_tool_event(
-                registry.state_client,
+            emit_tool_event(
+                service,
                 name,
                 _bound_arguments(signature, args, kwargs),
                 result,
@@ -313,7 +299,7 @@ def _usage_logged(tool_fn: Callable[..., Any], name: str) -> Callable[..., Any]:
 
 
 def _usage_declarations(
-    tool_names: list[str], registry: Registry
+    tool_names: list[str], service: CommandService
 ) -> list[dict[str, Any]]:
     """Return the usage-log declarations for the tools and registry commands."""
     items = [
@@ -331,7 +317,7 @@ def _usage_declarations(
                 "name": command,
                 "context": {"source": "odoo_client"},
             }
-            for command, _ in registry.items()
+            for command in service.registry.ids()
         ]
     except Exception:
         pass
@@ -339,7 +325,7 @@ def _usage_declarations(
 
 
 class OdooMCPServer:
-    """Expose a set of explicit MCP tools built from a command :class:`Registry`.
+    """Expose a set of explicit MCP tools built over a :class:`CommandService`.
 
     Every tool is defined explicitly in :mod:`odoo_mcp.tools` — one function
     per tool with a real, typed signature that delegates to a command. The server
@@ -347,9 +333,9 @@ class OdooMCPServer:
     surface is exactly what ``explicit_tools`` provides. This keeps the wire
     schema an intentional part of the interaction surface.
 
-    :param registry: Registry that owns the shared command dependencies. It is
-        the registry the explicit tools compose.
-    :type registry: Registry
+    :param service: Command service that owns the shared command dependencies.
+        It is the service the explicit tools compose.
+    :type service: CommandService
     :param server_name: Human-readable name advertised by the MCP server.
     :type server_name: str
     :param explicit_tools: Mapping of tool name to either a tool callable or a
@@ -366,13 +352,13 @@ class OdooMCPServer:
 
     def __init__(
         self,
-        registry: Registry,
+        service: CommandService,
         server_name: str = "Odoo MCP Server",
         explicit_tools: Optional[dict[str, ToolSpec]] = None,
         profiling: bool = False,
         instructions: str = DEFAULT_INSTRUCTIONS,
     ):
-        self.registry: Registry = registry
+        self.service: CommandService = service
         self._explicit_tools: dict[str, ToolSpec] = explicit_tools or {}
         self.profiling: bool = profiling
         self.mcp: FastMCP = FastMCP(
@@ -404,7 +390,7 @@ class OdooMCPServer:
         for name, spec in self._explicit_tools.items():
             tool_fn, description = self._unpack_spec(spec)
             tool_fn = _usage_logged(tool_fn, name)
-            tool_fn = _event_emitting(tool_fn, name, self.registry)
+            tool_fn = _event_emitting(tool_fn, name, self.service)
             tool_fn = _error_boundary(tool_fn)
             tool_fn = _toon_encoded(tool_fn)
             if self.profiling:
@@ -417,9 +403,7 @@ class OdooMCPServer:
                 )
             )
         if os.environ.get("USAGE_LOG_DIR", "").strip():
-            declare_usage(
-                _usage_declarations(list(self._explicit_tools), self.registry)
-            )
+            declare_usage(_usage_declarations(list(self._explicit_tools), self.service))
 
     @staticmethod
     def _unpack_spec(spec: ToolSpec) -> Tuple[Callable[..., Any], str]:

@@ -9,12 +9,11 @@ delegates to the shared billing loop behind a confirm gate, and the triage
 write delegates to the ``assign_event`` command.
 
 Its dependencies — the RPC client, the local state store, and the resolved
-config, plus the command registry it composes — are injected once at
-construction as a :class:`TuiDeps` bundle (``tui/__main__`` has all of them in
-hand). The transitions never harvest them off command instances (no reaching
-into a command's private ``._client`` or its ``.state`` / ``.config``); every
-state mutation goes through a command, so MCP and CLI can share the same
-operations.
+config, plus the command service it composes — are injected once at
+construction as a :class:`TuiDeps` bundle that holds the
+:class:`~odoo_dev_core.registry.CommandService`; the peers are the members of
+its ``services`` bundle. Every state mutation goes through a command, so MCP
+and CLI can share the same operations.
 
 The genuinely terminal-bound half — the Textual :class:`~textual.app.App`, its
 screens, and their key bindings — lives in :mod:`~odoo_tui.textual_app` and
@@ -34,9 +33,9 @@ from typing import Any, Callable, Optional
 # logged-hours read goes through billing's core door — no data-layer import
 # remains.
 from odoo_dev_core.billing.logged import logged_hours_by_task_day
-from odoo_dev_core.billing.upload import range_bounds, upload_sessions
-from odoo_dev_core.commands import Registry
-from odoo_dev_core.commands.protocols import RpcClient, SettingsView, StateStore
+from odoo_dev_core import CommandService
+from odoo_dev_core.billing.upload import range_bounds
+from odoo_dev_core.ports import RpcClient, SettingsView, StateStore
 from odoo_client.errors import OdooError
 from odoo_dev_data.events import EventRecord
 
@@ -57,31 +56,31 @@ _MODE_REVIEW = "review"
 class TuiDeps:
     """The driver's injected dependencies, resolved once at construction.
 
-    The read/write side needs the same three peers the command layer uses — the
-    RPC ``client``, the local state ``store``, and the resolved ``config`` — plus
-    the command ``registry`` it composes. They are handed in explicitly (see
-    :func:`odoo_tui.__main__.main`) rather than harvested off command
-    instances, so the driver never touches a command's private ``._client`` or
-    reaches into its ``.state`` / ``.config``. The ``store`` is the very object
-    the registry shares with every command, so a write routed through a command
-    (e.g. ``assign_event``) is immediately visible to the driver's own reads.
+    The read/write side needs the same peers the command layer uses - the RPC
+    ``client``, the local state ``store``, and the resolved ``config``. They are
+    the members of the ``service``'s ``Services`` bundle, so the ``store`` is the
+    very object every command shares: a write routed through a command (e.g.
+    ``assign_event``) is immediately visible to the driver's own reads.
 
-    Each peer is typed against its consumer-side port (#718) — the concrete
-    ``OdooClient`` / ``EventStore`` / ``LocalConfig`` the entrypoint
-    injects satisfy them structurally, and the driver names no data-layer
-    type.
-
-    :param registry: Command registry the driver dispatches through.
-    :param client: RPC client for the best-effort Odoo reads (logged hours) and
-        the upload path.
-    :param store: Shared state store (the same one the commands use).
-    :param config: Resolved SDK configuration view (e.g. the session gap).
+    :param service: Command service the driver dispatches through.
     """
 
-    registry: Registry
-    client: RpcClient
-    store: StateStore
-    config: SettingsView
+    service: CommandService
+
+    @property
+    def client(self) -> RpcClient:
+        """RPC client for the best-effort Odoo reads (logged hours)."""
+        return self.service.services.client
+
+    @property
+    def store(self) -> StateStore:
+        """Shared state store (the same one the commands use)."""
+        return self.service.services.events
+
+    @property
+    def config(self) -> SettingsView:
+        """Resolved SDK configuration view (e.g. the session gap)."""
+        return self.service.services.config
 
 
 @dataclass(frozen=True)
@@ -126,7 +125,8 @@ def query_sessions(deps: TuiDeps, window: DateWindow) -> list[dict[str, Any]]:
     TUI never recomputes boundaries. The result is a list of session dicts with
     embedded events.
     """
-    return deps.registry["query_sessions"].execute(
+    return deps.service.execute(
+        "query_sessions",
         start_date=window.start_iso(),
         end_date=window.end_iso(),
         include_events=True,
@@ -232,15 +232,14 @@ def _run_upload(
     """Bill the derived sessions through the shared upload loop (#354).
 
     The ``u`` key and the headless ``odoo-dev upload`` subcommand share the one
-    :func:`~odoo_dev_core.billing.upload.upload_sessions` path: idempotent per
+    ``upload`` command: idempotent per
     ``session_key`` (a re-run never double-bills) plus a window-scoped orphan
     sweep (#353) scoped to the inclusive dates forwarded here. Returns the full
     summary dict so the driver can surface partial failures (#582) in-app.
     """
-    return upload_sessions(
-        deps.client,
-        deps.store,
-        sessions,
+    return deps.service.execute(
+        "upload",
+        sessions=sessions,
         start_date=window.start_iso(),
         end_date=window.end_iso(),
     )
@@ -325,7 +324,7 @@ def do_resync(deps: TuiDeps, state: AppState) -> AppState:
     so any newly derivable sessions appear immediately, and surfaces each
     source's inserted count (or its error/skip reason) on the status line.
     """
-    result = deps.registry["resync"].execute()
+    result = deps.service.execute("resync")
     refreshed = refresh(deps, state)
     return replace(refreshed, status=_resync_status(result), pending_upload=False)
 
@@ -407,8 +406,8 @@ def assign_triage(deps: TuiDeps, state: AppState) -> AppState:
     if task_id is None:
         return replace(state, status="invalid task id — type a positive integer")
     row = state.triage_rows[state.triage_selected]
-    result = deps.registry["assign_event"].execute(
-        event_ids=list(row.event_ids), task_id=task_id
+    result = deps.service.execute(
+        "assign_event", event_ids=list(row.event_ids), task_id=task_id
     )
     updated = result["updated"]
     rows = _load_triage_rows(deps, state.window)

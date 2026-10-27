@@ -20,7 +20,7 @@ from io import StringIO
 from unittest.mock import patch
 
 import odoo_cli.__main__ as cli
-from odoo_dev_core.commands.log_event import normalize_repo_label
+from odoo_dev_core.attribution import normalize_repo_label
 from odoo_dev_data.events import EventStore as TaskStateDB
 
 
@@ -58,7 +58,7 @@ class TestNormalizeRepoLabel(unittest.TestCase):
         self.assertEqual(normalize_repo_label("  owner/repo\n"), "owner/repo")
 
     def test_none_defers_to_cwd_derivation(self) -> None:
-        # ``None`` is LogEventCommand.execute's "resolve from the working tree"
+        # ``None`` is the ``log_event`` command's "resolve from the working tree"
         # sentinel; it must NOT normalize to a literal label.
         self.assertIsNone(normalize_repo_label(None))
 

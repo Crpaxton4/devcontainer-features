@@ -1,5 +1,19 @@
 """Logic layer of the odoo-dev suite: the command registry and builtins, billing and sessionization."""
 
-from .commands import Command, LogEventCommand, Registry
+from .ports import Services
+from .registry import (
+    CommandRegistry,
+    CommandService,
+    CommandSpec,
+    command,
+    default_registry,
+)
 
-__all__ = ["Command", "LogEventCommand", "Registry"]
+__all__ = [
+    "CommandRegistry",
+    "CommandService",
+    "CommandSpec",
+    "Services",
+    "command",
+    "default_registry",
+]

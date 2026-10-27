@@ -17,10 +17,6 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 
 from odoo_client.client import OdooClient
-from odoo_dev_core.commands.builtin import BUILTIN_COMMANDS
-from odoo_dev_core.commands.builtin.read_knowledge_article import (
-    ReadKnowledgeArticleCommand,
-)
 from odoo_client.transport.errors import (
     OdooAccessError,
     OdooMissingRecordError,
@@ -33,6 +29,8 @@ from odoo_dev_core.services.knowledge import (
     _is_missing_model_error,
     read_knowledge_article,
 )
+from ...fakes import service
+from odoo_dev_core import default_registry
 
 _READ_FIELDS = ["id", "name", "body", "write_date"]
 
@@ -287,26 +285,23 @@ class TestReadKnowledgeArticleCommand(unittest.TestCase):
     """The built-in command registers and delegates to the helper."""
 
     def test_registered_under_name(self):
-        self.assertIn("read_knowledge_article", BUILTIN_COMMANDS)
-        self.assertIs(
-            BUILTIN_COMMANDS["read_knowledge_article"],
-            ReadKnowledgeArticleCommand,
-        )
+        self.assertIn("read_knowledge_article", default_registry().ids())
 
     def test_execute_delegates_article_id(self):
         client = MagicMock()
         target = (
-            "odoo_dev_core.commands.builtin.read_knowledge_article."
-            "read_knowledge_article"
+            "odoo_dev_core.builtins.read_knowledge_article." "read_knowledge_article"
         )
         with patch(target, return_value={"shaped": True}) as helper:
-            result = ReadKnowledgeArticleCommand(client).execute(9)
+            result = service(client=client).execute(
+                "read_knowledge_article", article_id=9
+            )
         self.assertEqual(result, {"shaped": True})
         helper.assert_called_once_with(client, 9)
 
     def test_execute_defaults_are_read_only(self):
         client, executor = _client([_article()])
-        ReadKnowledgeArticleCommand(client).execute(7)
+        service(client=client).execute("read_knowledge_article", article_id=7)
         # A single read-only read, no ir.model probe and no writes.
         methods = [method for _, method, _, _ in executor.calls]
         self.assertEqual(methods, ["read"])

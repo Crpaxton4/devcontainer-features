@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import MagicMock, patch
 
-from odoo_dev_core.commands.builtin import BUILTIN_COMMANDS
+from odoo_dev_core import default_registry
 from odoo_mcp import __main__ as entry
 from odoo_mcp.tools import TOOL_FACTORIES
 
@@ -12,7 +12,7 @@ class TestMainEntryPoint(unittest.TestCase):
         self.guard = guard.start()
         self.addCleanup(guard.stop)
 
-    def test_main_builds_default_registry_and_runs(self):
+    def test_main_builds_default_service_and_runs(self):
         with (
             patch("odoo_mcp.bootstrap.build_client") as MockClient,
             patch("odoo_mcp.__main__.OdooMCPServer") as MockServer,
@@ -39,9 +39,8 @@ class TestMainEntryPoint(unittest.TestCase):
         ):
             entry.main()
 
-        registry = MockServer.call_args.args[0]
-        registered = [name for name, _ in registry.items()]
-        self.assertEqual(set(registered), set(BUILTIN_COMMANDS))
+        service = MockServer.call_args.args[0]
+        self.assertEqual(service.registry.ids(), default_registry().ids())
 
     def test_main_passes_resolved_profiling_to_server(self):
         fake_config = MagicMock()

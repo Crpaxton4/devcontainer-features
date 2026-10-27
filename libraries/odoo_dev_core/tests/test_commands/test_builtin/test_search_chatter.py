@@ -11,10 +11,10 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 
 from odoo_client.client import OdooClient
-from odoo_dev_core.commands.builtin import BUILTIN_COMMANDS
-from odoo_dev_core.commands.builtin.search_chatter import SearchChatterCommand
 from odoo_client.transport.executor import OdooExecutor
 from odoo_dev_core.services.odoo_helpers import search_chatter, shape_chatter_message
+from ...fakes import service
+from odoo_dev_core import default_registry
 
 _SEARCH_FIELDS = [
     "id",
@@ -196,15 +196,15 @@ class TestSearchChatterCommand(unittest.TestCase):
     """The built-in command registers and delegates to the helper."""
 
     def test_registered_under_name(self):
-        self.assertIn("search_chatter", BUILTIN_COMMANDS)
-        self.assertIs(BUILTIN_COMMANDS["search_chatter"], SearchChatterCommand)
+        self.assertIn("search_chatter", default_registry().ids())
 
     def test_execute_delegates_all_kwargs(self):
         client = MagicMock()
-        target = "odoo_dev_core.commands.builtin.search_chatter.search_chatter"
+        target = "odoo_dev_core.builtins.search_chatter.search_chatter"
         with patch(target, return_value=["shaped"]) as helper:
-            result = SearchChatterCommand(client).execute(
-                "hello",
+            result = service(client=client).execute(
+                "search_chatter",
+                query="hello",
                 model="project.task",
                 record_id=42,
                 date_from="2026-01-01",
@@ -224,7 +224,7 @@ class TestSearchChatterCommand(unittest.TestCase):
 
     def test_execute_defaults_are_read_only_search(self):
         client, executor = _client([_msg()])
-        SearchChatterCommand(client).execute("hello")
+        service(client=client).execute("search_chatter", query="hello")
         # A single read-only search_read call, no writes of any kind.
         self.assertEqual(len(executor.calls), 1)
         model, method, _, _ = executor.calls[0]

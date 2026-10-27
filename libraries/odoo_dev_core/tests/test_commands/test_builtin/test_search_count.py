@@ -12,10 +12,10 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 
 from odoo_client.client import OdooClient
-from odoo_dev_core.commands.builtin import BUILTIN_COMMANDS
-from odoo_dev_core.commands.builtin.search_count import SearchCountCommand
+from odoo_dev_core import default_registry
 from odoo_mcp.tools.atomic import make_search_count_tool
 from odoo_client.transport.executor import OdooExecutor
+from ...fakes import service
 
 
 class _RecordingExecutor(OdooExecutor):
@@ -46,13 +46,12 @@ class TestSearchCountCommand(unittest.TestCase):
     """The command issues one ``search_count`` and returns its integer."""
 
     def test_registered_under_name(self):
-        self.assertIn("search_count", BUILTIN_COMMANDS)
-        self.assertIs(BUILTIN_COMMANDS["search_count"], SearchCountCommand)
+        self.assertIn("search_count", default_registry().ids())
 
     def test_counts_with_domain(self):
         client, executor = _client(count=1234)
-        result = SearchCountCommand(client).execute(
-            "project.task", [("stage_id", "=", 3)]
+        result = service(client=client).execute(
+            "search_count", model="project.task", domain=[("stage_id", "=", 3)]
         )
         self.assertEqual(result, 1234)
         self.assertEqual(len(executor.calls), 1)
@@ -62,7 +61,7 @@ class TestSearchCountCommand(unittest.TestCase):
 
     def test_none_domain_counts_all_records(self):
         client, executor = _client(count=7)
-        result = SearchCountCommand(client).execute("res.partner")
+        result = service(client=client).execute("search_count", model="res.partner")
         self.assertEqual(result, 7)
         model, method, args, _ = executor.calls[0]
         self.assertEqual((model, method), ("res.partner", "search_count"))
@@ -71,7 +70,7 @@ class TestSearchCountCommand(unittest.TestCase):
 
     def test_execute_is_read_only(self):
         client, executor = _client(count=0)
-        SearchCountCommand(client).execute("project.task")
+        service(client=client).execute("search_count", model="project.task")
         methods = {method for _, method, _, _ in executor.calls}
         self.assertEqual(methods, {"search_count"})
 
@@ -82,20 +81,14 @@ class TestSearchCountToolInvocation(unittest.TestCase):
     def test_tool_routes_model_and_domain_to_command(self):
         captured: dict[str, Any] = {}
 
-        class _Reg:
-            def __getitem__(self, name):
-                cmd = MagicMock()
+        class _Service:
+            def execute(self, name, /, **kwargs):
+                captured["name"] = name
+                captured["model"] = kwargs["model"]
+                captured["domain"] = kwargs["domain"]
+                return 42
 
-                def _execute(model, domain=None):
-                    captured["name"] = name
-                    captured["model"] = model
-                    captured["domain"] = domain
-                    return 42
-
-                cmd.execute.side_effect = _execute
-                return cmd
-
-        tool = make_search_count_tool(_Reg())
+        tool = make_search_count_tool(_Service())
         result = tool("project.task", [("active", "=", True)])
         self.assertEqual(result, 42)
         self.assertEqual(captured["name"], "search_count")
@@ -104,9 +97,7 @@ class TestSearchCountToolInvocation(unittest.TestCase):
 
     def test_tool_end_to_end_through_client(self):
         client, executor = _client(count=9001)
-        registry = MagicMock()
-        registry.__getitem__.return_value = SearchCountCommand(client)
-        tool = make_search_count_tool(registry)
+        tool = make_search_count_tool(service(client=client))
         result = tool("project.task", [("stage_id", "!=", False)])
         self.assertEqual(result, 9001)
         model, method, args, _ = executor.calls[0]
@@ -118,20 +109,18 @@ class TestSearchCountToolListing(unittest.TestCase):
     """The tool is registered on the MCP server's tool surface (issue #445)."""
 
     def test_tool_appears_in_server_listing(self):
-        from odoo_dev_core.commands import Registry
-        from odoo_dev_core.commands.builtin import register_builtins
         from odoo_mcp.server import OdooMCPServer
         from odoo_mcp.tools import build_explicit_tools
 
-        registry = register_builtins(Registry(MagicMock()))
-        tools = build_explicit_tools(registry)
+        command_service = service(client=MagicMock())
+        tools = build_explicit_tools(command_service)
         self.assertIn("search_count", tools)
 
         added: list[Any] = []
         mock_mcp = MagicMock()
         mock_mcp.add_tool.side_effect = added.append
         with patch("odoo_mcp.server.FastMCP", return_value=mock_mcp):
-            OdooMCPServer(registry, explicit_tools=tools)
+            OdooMCPServer(command_service, explicit_tools=tools)
         self.assertIn("search_count", {tool.name for tool in added})
 
 

@@ -9,7 +9,7 @@ the same in-memory fakes the transition tests use.
 
 import unittest
 from datetime import date, datetime
-from unittest.mock import patch
+from unittest.mock import MagicMock
 
 from odoo_dev_data.events import EventRecord
 from odoo_tui.app import AppState
@@ -28,7 +28,6 @@ from odoo_tui.window import DateWindow
 from odoo_dev_core.sessionization.stats import compute_stats
 from ..test_tui._fake import (
     FakeCommand,
-    FakeRegistry,
     build_fake_deps,
     build_fake_store,
     sample_sessions,
@@ -111,7 +110,7 @@ class TestMainScreen(unittest.IsolatedAsyncioTestCase):
             await pilot.pause()
             self.assertIsInstance(app.screen, MainScreen)
             # The initial query ran once, bounded by the pinned window.
-            call = app.deps.registry["query_sessions"].calls[0]
+            call = app.deps.service.commands["query_sessions"].calls[0]
             self.assertEqual(call["start_date"], "2026-06-01")
             self.assertEqual(call["end_date"], "2026-06-07")
             header = _panel_text(app, "#header")
@@ -137,7 +136,7 @@ class TestMainScreen(unittest.IsolatedAsyncioTestCase):
         async with app.run_test(size=(100, 30)) as pilot:
             await pilot.press("left")
             self.assertEqual(app.state.window.start, date(2026, 5, 31))
-            self.assertEqual(len(app.deps.registry["query_sessions"].calls), 2)
+            self.assertEqual(len(app.deps.service.commands["query_sessions"].calls), 2)
             self.assertIn("2026-05-31", _panel_text(app, "#header"))
 
     async def test_all_four_window_actions_are_bound(self):
@@ -169,11 +168,9 @@ class TestMainScreen(unittest.IsolatedAsyncioTestCase):
             await pilot.press("u")
             self.assertTrue(app.state.pending_upload)
             self.assertIn("upload 2 session(s)?", _panel_text(app, "#status"))
-            with patch(
-                "odoo_tui.app.upload_sessions",
-                return_value={"uploaded": 2, "retired": 0},
-            ) as mock_upload:
-                await pilot.press("y")
+            mock_upload = MagicMock(return_value={"uploaded": 2, "retired": 0})
+            app.deps.service.commands["upload"] = MagicMock(execute=mock_upload)
+            await pilot.press("y")
             self.assertFalse(app.state.pending_upload)
             self.assertIn("uploaded 2 session(s)", _panel_text(app, "#status"))
             mock_upload.assert_called_once()
@@ -182,8 +179,9 @@ class TestMainScreen(unittest.IsolatedAsyncioTestCase):
         app = _app()
         async with app.run_test(size=(100, 30)) as pilot:
             await pilot.press("u")
-            with patch("odoo_tui.app.upload_sessions") as mock_upload:
-                await pilot.press("n")
+            mock_upload = MagicMock()
+            app.deps.service.commands["upload"] = MagicMock(execute=mock_upload)
+            await pilot.press("n")
             self.assertFalse(app.state.pending_upload)
             self.assertIn("upload cancelled", _panel_text(app, "#status"))
             mock_upload.assert_not_called()
@@ -197,21 +195,19 @@ class TestMainScreen(unittest.IsolatedAsyncioTestCase):
             await pilot.press("left")
             self.assertIn("upload cancelled", _panel_text(app, "#status"))
             self.assertEqual(app.state.window, WINDOW)  # the window never moved
-            self.assertEqual(len(app.deps.registry["query_sessions"].calls), 1)
+            self.assertEqual(len(app.deps.service.commands["query_sessions"].calls), 1)
 
     async def test_resync_key_runs_command_and_reports_counts(self):
-        registry = FakeRegistry(
-            {
-                "query_sessions": FakeCommand(result=sample_sessions()),
-                "resync": FakeCommand(
-                    result={"git": {"inserted": 1}, "github": {"skipped": "no gh"}}
-                ),
-            }
-        )
-        app = _app(build_fake_deps(registry=registry))
+        commands = {
+            "query_sessions": FakeCommand(result=sample_sessions()),
+            "resync": FakeCommand(
+                result={"git": {"inserted": 1}, "github": {"skipped": "no gh"}}
+            ),
+        }
+        app = _app(build_fake_deps(commands=commands))
         async with app.run_test(size=(100, 30)) as pilot:
             await pilot.press("r")
-            self.assertEqual(app.deps.registry["resync"].calls, [{}])
+            self.assertEqual(app.deps.service.commands["resync"].calls, [{}])
             status = _panel_text(app, "#status")
             self.assertIn("resync — git: +1", status)
             self.assertIn("github: skipped (no gh)", status)
@@ -263,13 +259,11 @@ def _triage_app(assign_result={"updated": 1}):
     # First read (opening triage) finds two lone events; the reload after an
     # assignment finds none left.
     store.get_unattributed_events.side_effect = [_unattributed(), []]
-    registry = FakeRegistry(
-        {
-            "query_sessions": FakeCommand(result=sample_sessions()),
-            "assign_event": FakeCommand(result=assign_result),
-        }
-    )
-    return _app(build_fake_deps(registry=registry, store=store))
+    commands = {
+        "query_sessions": FakeCommand(result=sample_sessions()),
+        "assign_event": FakeCommand(result=assign_result),
+    }
+    return _app(build_fake_deps(commands=commands, store=store))
 
 
 class TestTriageScreen(unittest.IsolatedAsyncioTestCase):
@@ -311,7 +305,7 @@ class TestTriageScreen(unittest.IsolatedAsyncioTestCase):
             await pilot.press("t")
             await pilot.press("4", "2")
             await pilot.press("enter")
-            call = app.deps.registry["assign_event"].calls[0]
+            call = app.deps.service.commands["assign_event"].calls[0]
             self.assertEqual(call, {"event_ids": [1], "task_id": 42})
             self.assertIn(
                 "assigned 1 events of series gcal:solo-1 to task 42",
@@ -326,7 +320,7 @@ class TestTriageScreen(unittest.IsolatedAsyncioTestCase):
             await pilot.press("t")
             await pilot.press("enter")
             self.assertIn("invalid task id", _panel_text(app, "#status"))
-            self.assertEqual(app.deps.registry["assign_event"].calls, [])
+            self.assertEqual(app.deps.service.commands["assign_event"].calls, [])
 
     async def test_q_returns_to_the_timeline(self):
         app = _triage_app()

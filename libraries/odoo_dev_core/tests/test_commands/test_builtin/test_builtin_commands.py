@@ -1,22 +1,9 @@
 import unittest
 from unittest.mock import MagicMock, patch
 
-import odoo_dev_core.commands.builtin as builtin_pkg
-from odoo_dev_core.commands import Command, Registry
-from odoo_dev_core.commands.builtin import (
-    BUILTIN_COMMANDS,
-    CreateTaskCommand,
-    GetEmployeeIdCommand,
-    GetModelsCommand,
-    GetTaskCommand,
-    GetTaskChatterCommand,
-    GetTasksCommand,
-    GetTodoCommand,
-    GetUidCommand,
-    builtin_command,
-    register_builtins,
-)
 from odoo_dev_data.config import ModelIdsNotWritableError
+from ...fakes import service
+from odoo_dev_core import default_registry
 
 TASK_FIELDS = ["name", "project_id", "stage_id", "user_ids", "date_deadline"]
 
@@ -25,7 +12,7 @@ class TestGetUidCommand(unittest.TestCase):
     def test_returns_client_uid(self):
         client = MagicMock()
         client.uid = 42
-        self.assertEqual(GetUidCommand(client).execute(), 42)
+        self.assertEqual(service(client=client).execute("get_uid"), 42)
 
 
 class TestGetEmployeeIdCommand(unittest.TestCase):
@@ -33,10 +20,10 @@ class TestGetEmployeeIdCommand(unittest.TestCase):
         client = MagicMock()
         state = MagicMock()
         with patch(
-            "odoo_dev_core.commands.builtin.get_employee_id.resolve_employee_id",
+            "odoo_dev_core.builtins.get_employee_id.resolve_employee_id",
             return_value=49,
         ) as resolver:
-            result = GetEmployeeIdCommand(client, state).execute()
+            result = service(client=client, events=state).execute("get_employee_id")
 
         # Delegation, not a reimplementation: the billing writer and the export
         # path must never disagree about who the authenticated user is (#499).
@@ -59,7 +46,7 @@ class TestGetModelsCommand(unittest.TestCase):
     def test_reads_model_names(self):
         client, models = self._client(rows=[{"id": 12, "model": "res.partner"}])
 
-        result = GetModelsCommand(client).execute()
+        result = service(client=client).execute("get_models")
 
         client.__getitem__.assert_called_once_with("ir.model")
         models.search.assert_called_once_with([])
@@ -72,7 +59,7 @@ class TestGetModelsCommand(unittest.TestCase):
         client, _ = self._client()
         config = MagicMock()
 
-        result = GetModelsCommand(client, config=config).execute()
+        result = service(client=client, config=config).execute("get_models")
 
         config.set_model_id.assert_not_called()
         self.assertEqual(result["persisted"], {})
@@ -82,8 +69,8 @@ class TestGetModelsCommand(unittest.TestCase):
         client, _ = self._client()
         config = MagicMock()
 
-        result = GetModelsCommand(client, config=config).execute(
-            persist=["project.task"]
+        result = service(client=client, config=config).execute(
+            "get_models", persist=["project.task"]
         )
 
         config.set_model_id.assert_called_once_with("project.task", 71)
@@ -95,8 +82,8 @@ class TestGetModelsCommand(unittest.TestCase):
         config = MagicMock()
         config.set_model_id.side_effect = ModelIdsNotWritableError("read-only")
 
-        result = GetModelsCommand(client, config=config).execute(
-            persist=["project.task"]
+        result = service(client=client, config=config).execute(
+            "get_models", persist=["project.task"]
         )
 
         # The read the caller asked for must never be lost to a filesystem
@@ -109,8 +96,8 @@ class TestGetModelsCommand(unittest.TestCase):
         client, _ = self._client()
         config = MagicMock()
 
-        result = GetModelsCommand(client, config=config).execute(
-            persist=["not.a.model"]
+        result = service(client=client, config=config).execute(
+            "get_models", persist=["not.a.model"]
         )
 
         config.set_model_id.assert_not_called()
@@ -120,7 +107,7 @@ class TestGetModelsCommand(unittest.TestCase):
     def test_description_names_the_persist_argument_and_the_section(self):
         # LLM-facing: the description is how a caller learns the gap can be
         # closed by a command rather than by editing a file (#890).
-        description = GetModelsCommand(MagicMock()).description
+        description = default_registry().get("get_models").description
         self.assertIn("persist", description)
         self.assertIn("[model_ids]", description)
 
@@ -131,7 +118,7 @@ class TestGetTasksCommand(unittest.TestCase):
         tasks = client.__getitem__.return_value
         tasks.search.return_value.read.return_value = [{"name": "T"}]
 
-        result = GetTasksCommand(client).execute()
+        result = service(client=client).execute("get_tasks")
 
         client.__getitem__.assert_called_once_with("project.task")
         tasks.search.assert_called_once_with([], limit=10)
@@ -143,7 +130,7 @@ class TestGetTasksCommand(unittest.TestCase):
         tasks = client.__getitem__.return_value
         domain = [("stage_id", "=", 3)]
 
-        GetTasksCommand(client).execute(domain=domain, limit=5)
+        service(client=client).execute("get_tasks", domain=domain, limit=5)
 
         tasks.search.assert_called_once_with(domain, limit=5)
 
@@ -154,10 +141,8 @@ class TestGetTasksCommand(unittest.TestCase):
         tasks = client.__getitem__.return_value
         tasks.search.return_value.read.return_value = [{"name": "T"}]
 
-        with patch(
-            "odoo_dev_core.commands.builtin.get_tasks.get_task_detail"
-        ) as detail:
-            result = GetTasksCommand(client).execute()
+        with patch("odoo_dev_core.builtins.get_tasks.get_task_detail") as detail:
+            result = service(client=client).execute("get_tasks")
 
         detail.assert_not_called()
         tasks.search.return_value.read.assert_called_once_with(TASK_FIELDS)
@@ -175,10 +160,12 @@ class TestGetTasksCommand(unittest.TestCase):
         }
 
         with patch(
-            "odoo_dev_core.commands.builtin.get_tasks.get_task_detail",
+            "odoo_dev_core.builtins.get_tasks.get_task_detail",
             side_effect=lambda client, task_id, include: details[task_id],
         ) as detail:
-            result = GetTasksCommand(client).execute(include=["description"])
+            result = service(client=client).execute(
+                "get_tasks", include=["description"]
+            )
 
         self.assertEqual(detail.call_count, 2)
         detail.assert_any_call(client, 7, include=["description"])
@@ -193,8 +180,8 @@ class TestGetTasksCommand(unittest.TestCase):
         tasks.search.return_value.ids = ()
         domain = [("stage_id", "=", 3)]
 
-        result = GetTasksCommand(client).execute(
-            domain=domain, limit=5, include=["description"]
+        result = service(client=client).execute(
+            "get_tasks", domain=domain, limit=5, include=["description"]
         )
 
         tasks.search.assert_called_once_with(domain, limit=5)
@@ -209,12 +196,14 @@ class TestGetTasksCommand(unittest.TestCase):
         surviving = {"task_id": 8, "description": "eight"}
 
         with patch(
-            "odoo_dev_core.commands.builtin.get_tasks.get_task_detail",
+            "odoo_dev_core.builtins.get_tasks.get_task_detail",
             side_effect=lambda client, task_id, include: (
                 surviving if task_id == 8 else None
             ),
         ):
-            result = GetTasksCommand(client).execute(include=["description"])
+            result = service(client=client).execute(
+                "get_tasks", include=["description"]
+            )
 
         self.assertEqual(result, [surviving])
 
@@ -226,10 +215,10 @@ class TestGetTasksCommand(unittest.TestCase):
         tasks.search.return_value.ids = (7,)
 
         with patch(
-            "odoo_dev_core.commands.builtin.get_tasks.get_task_detail",
+            "odoo_dev_core.builtins.get_tasks.get_task_detail",
             return_value={"task_id": 7},
         ) as detail:
-            result = GetTasksCommand(client).execute(include=[])
+            result = service(client=client).execute("get_tasks", include=[])
 
         detail.assert_called_once_with(client, 7, include=[])
         self.assertEqual(result, [{"task_id": 7}])
@@ -241,7 +230,7 @@ class TestGetTodoCommand(unittest.TestCase):
         tasks = client.__getitem__.return_value
         tasks.search.return_value.read.return_value = [{"name": "T"}, {"name": "U"}]
 
-        result = GetTodoCommand(client).execute(7)
+        result = service(client=client).execute("get_todo", task_id=7)
 
         client.__getitem__.assert_called_once_with("project.task")
         tasks.search.assert_called_once_with([("id", "=", 7)], limit=1)
@@ -252,7 +241,7 @@ class TestGetTodoCommand(unittest.TestCase):
         tasks = client.__getitem__.return_value
         tasks.search.return_value.read.return_value = []
 
-        self.assertIsNone(GetTodoCommand(client).execute(99))
+        self.assertIsNone(service(client=client).execute("get_todo", task_id=99))
 
 
 class TestCreateTaskCommand(unittest.TestCase):
@@ -261,7 +250,9 @@ class TestCreateTaskCommand(unittest.TestCase):
         tasks = client.__getitem__.return_value
         tasks.create.return_value = 1001
 
-        result = CreateTaskCommand(client).execute("Do it", 4, "details")
+        result = service(client=client).execute(
+            "create_task", name="Do it", project_id=4, description="details"
+        )
 
         client.__getitem__.assert_called_once_with("project.task")
         tasks.create.assert_called_once_with(
@@ -273,42 +264,16 @@ class TestCreateTaskCommand(unittest.TestCase):
         client = MagicMock()
         tasks = client.__getitem__.return_value
 
-        CreateTaskCommand(client).execute("Quick", 2)
+        service(client=client).execute("create_task", name="Quick", project_id=2)
 
         tasks.create.assert_called_once_with(
             {"name": "[MCP] Quick", "project_id": 2, "description": ""}
         )
 
 
-class TestGetTaskAndChatterInBuiltins(unittest.TestCase):
-    def test_get_task_in_builtin_commands(self):
-        self.assertIn("get_task", BUILTIN_COMMANDS)
-        self.assertIs(BUILTIN_COMMANDS["get_task"], GetTaskCommand)
-
-    def test_get_task_chatter_in_builtin_commands(self):
-        self.assertIn("get_task_chatter", BUILTIN_COMMANDS)
-        self.assertIs(BUILTIN_COMMANDS["get_task_chatter"], GetTaskChatterCommand)
-
-
-class TestRegisterBuiltins(unittest.TestCase):
-    def test_registers_all_builtins(self):
-        registry = register_builtins(Registry(MagicMock()))
-        registered = {name for name, _ in registry.items()}
-        self.assertEqual(registered, set(BUILTIN_COMMANDS))
-
-    def test_returns_same_registry(self):
-        registry = Registry(MagicMock())
-        self.assertIs(register_builtins(registry), registry)
-
-    def test_metadata_matches_registration_keys(self):
-        for name, command in BUILTIN_COMMANDS.items():
-            self.assertEqual(command(MagicMock()).name, name)
-
-
 #: The exact built-in command surface, pinned independently of the
-#: decorator-populated ``BUILTIN_COMMANDS`` so a dropped ``@builtin_command`` (or
-#: an unimported command module) fails loudly instead of silently shrinking the
-#: registry past the self-referential parity tests.
+#: decorator-recorded specs so a dropped ``@command`` (or an unimported builtin
+#: module) fails loudly instead of silently shrinking the registry.
 EXPECTED_BUILTIN_NAMES = frozenset(
     {
         "get_uid",
@@ -344,77 +309,26 @@ EXPECTED_BUILTIN_NAMES = frozenset(
         "get_activities",
         "mark_activity_done",
         "search_activity_types",
+        "log_event",
+        "upload",
     }
 )
 
 
 class TestBuiltinCommandsExactSet(unittest.TestCase):
-    """``BUILTIN_COMMANDS`` matches an explicit, hand-pinned name set."""
+    """The default registry matches an explicit, hand-pinned id set."""
 
-    def test_exact_command_name_set(self):
-        self.assertEqual(set(BUILTIN_COMMANDS), set(EXPECTED_BUILTIN_NAMES))
+    def test_exact_command_id_set(self):
+        self.assertEqual(set(default_registry().ids()), set(EXPECTED_BUILTIN_NAMES))
 
     def test_no_duplicate_or_missing_count(self):
-        self.assertEqual(len(BUILTIN_COMMANDS), len(EXPECTED_BUILTIN_NAMES))
+        self.assertEqual(len(default_registry().ids()), len(EXPECTED_BUILTIN_NAMES))
+        self.assertEqual(len(EXPECTED_BUILTIN_NAMES), 35)
 
-
-class TestBuiltinCommandDecorator(unittest.TestCase):
-    """The ``@builtin_command`` decorator populates ``BUILTIN_COMMANDS``."""
-
-    def test_registers_class_under_its_name(self):
-        class _Fresh(Command):
-            _name = "fresh_probe_cmd"
-            _description = "probe"
-
-            def execute(self):  # pragma: no cover - never invoked
-                return None
-
-        # patch.dict leaves BUILTIN_COMMANDS untouched after the block, so this
-        # probe registration does not leak into the real built-in surface.
-        with patch.dict(BUILTIN_COMMANDS, clear=False):
-            returned = builtin_command(_Fresh)
-            # The decorator is transparent (returns the class) and keys by ``_name``.
-            self.assertIs(returned, _Fresh)
-            self.assertIs(BUILTIN_COMMANDS["fresh_probe_cmd"], _Fresh)
-        self.assertNotIn("fresh_probe_cmd", BUILTIN_COMMANDS)
-
-    def test_duplicate_name_raises(self):
-        class _Dupe(Command):
-            _name = "get_uid"  # collides with the real GetUidCommand
-            _description = "dupe"
-
-            def execute(self):  # pragma: no cover - never invoked
-                return None
-
-        with self.assertRaises(ValueError) as ctx:
-            builtin_command(_Dupe)
-        self.assertIn("get_uid", str(ctx.exception))
-        # The collision left the genuine command in place (no silent overwrite).
-        self.assertIs(BUILTIN_COMMANDS["get_uid"], GetUidCommand)
-
-    def test_keys_equal_each_class_name_attribute(self):
-        # Determinism: every registration key is exactly the class's ``_name``.
-        for name, command in BUILTIN_COMMANDS.items():
-            self.assertEqual(command._name, name)
-
-
-class TestBuiltinExports(unittest.TestCase):
-    """``__all__`` is derived from the decorator-populated registry."""
-
-    def test_all_entries_are_real_attributes(self):
-        for name in builtin_pkg.__all__:
-            self.assertTrue(
-                hasattr(builtin_pkg, name), f"{name} in __all__ is not exported"
-            )
-
-    def test_all_covers_every_registered_command_class(self):
-        exported = set(builtin_pkg.__all__)
-        for command in BUILTIN_COMMANDS.values():
-            self.assertIn(command.__name__, exported)
-
-    def test_all_includes_registration_api(self):
-        for name in ("BUILTIN_COMMANDS", "builtin_command", "register_builtins"):
-            self.assertIn(name, builtin_pkg.__all__)
+    def test_get_task_and_chatter_are_builtins(self):
+        ids = default_registry().ids()
+        self.assertIn("get_task", ids)
+        self.assertIn("get_task_chatter", ids)
 
 
 if __name__ == "__main__":

@@ -14,12 +14,13 @@ from typing import Any
 from unittest.mock import patch
 
 from odoo_client.client import OdooClient
-from odoo_dev_core.commands.builtin import UnbilledHoursCommand
 from odoo_client.transport.executor import OdooExecutor
 from odoo_dev_core.services.odoo_helpers import (
     MISSING_UNBILLED_CAPABILITY_MESSAGE,
     get_unbilled_hours,
 )
+from ...fakes import service
+from odoo_dev_core import default_registry
 
 _MODEL = "account.analytic.line"
 _INVOICE_ID = "timesheet_invoice_id"
@@ -275,8 +276,8 @@ class TestCommandWrapper(unittest.TestCase):
     def test_execute_delegates_with_kwargs(self):
         client, executor = _client({_INVOICE_ID, _INVOICE_TYPE}, _FULL_ROWS)
 
-        result = UnbilledHoursCommand(client).execute(
-            start_date="2026-07-01", project_id=3
+        result = service(client=client).execute(
+            "unbilled_hours", start_date="2026-07-01", project_id=3
         )
 
         _, _, args, _ = executor.search_read_call()
@@ -285,9 +286,9 @@ class TestCommandWrapper(unittest.TestCase):
         self.assertEqual(result["mode"], "full")
 
     def test_metadata(self):
-        command = UnbilledHoursCommand(object())
-        self.assertEqual(command.name, "unbilled_hours")
-        self.assertIn("unbilled", command.description)
+        spec = default_registry().get("unbilled_hours")
+        self.assertEqual(spec.id, "unbilled_hours")
+        self.assertIn("unbilled", spec.description)
 
 
 class TestToonEncoding(unittest.TestCase):

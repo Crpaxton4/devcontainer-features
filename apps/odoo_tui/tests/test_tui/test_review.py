@@ -25,32 +25,9 @@ from odoo_tui.app import (
 from odoo_tui.evidence import STRONG, WEAK, Overlap, ReviewCard
 from odoo_tui.review import review_body_lines
 from odoo_tui.window import DateWindow
-from ..support import make_event_store
+from ..support import make_event_store, make_service
 
 UTC = timezone.utc
-
-
-# ── Fake registry plumbing ──────────────────────────────────────────────────
-
-
-class FakeCommand:
-    def __init__(self, result=None, state=None, client=None):
-        self._result = result
-        self.state = state
-        self._client = client
-        self.calls = []
-
-    def execute(self, **kwargs):
-        self.calls.append(kwargs)
-        return self._result
-
-
-class FakeRegistry:
-    def __init__(self, commands):
-        self._commands = commands
-
-    def __getitem__(self, name):
-        return self._commands[name]
 
 
 class FakeClient:
@@ -139,8 +116,7 @@ def _deps(store, client):
     reads already-logged hours off the injected client — never harvested off a
     command instance's ``.state`` or private ``._client``.
     """
-    registry = FakeRegistry({"query_sessions": FakeCommand(state=store)})
-    return TuiDeps(registry=registry, client=client, store=store, config=None)
+    return TuiDeps(service=make_service(store, client))
 
 
 def _state(store, sessions):

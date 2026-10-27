@@ -14,8 +14,6 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 
 from odoo_client.client import OdooClient
-from odoo_dev_core.commands.builtin import BUILTIN_COMMANDS
-from odoo_dev_core.commands.builtin.get_mail_status import GetMailStatusCommand
 from odoo_client.transport.errors import OdooAccessError
 from odoo_client.transport.executor import OdooExecutor
 from odoo_client.transport.errors import OdooError
@@ -26,6 +24,8 @@ from odoo_dev_core.services.mail_status import (
     get_mail_status,
 )
 from odoo_dev_core.services.odoo_helpers import m2o_id
+from ...fakes import service
+from odoo_dev_core import default_registry
 
 _MESSAGE_FIELDS = ["id", "date", "subject"]
 _MAIL_BASE_FIELDS = [
@@ -289,14 +289,15 @@ class TestGetMailStatusCommand(unittest.TestCase):
     """The built-in command registers and delegates to the helper."""
 
     def test_registered_under_name(self):
-        self.assertIn("get_mail_status", BUILTIN_COMMANDS)
-        self.assertIs(BUILTIN_COMMANDS["get_mail_status"], GetMailStatusCommand)
+        self.assertIn("get_mail_status", default_registry().ids())
 
     def test_execute_delegates_args(self):
         client = MagicMock()
-        target = "odoo_dev_core.commands.builtin.get_mail_status.get_mail_status"
+        target = "odoo_dev_core.builtins.get_mail_status.get_mail_status"
         with patch(target, return_value=["shaped"]) as helper:
-            result = GetMailStatusCommand(client).execute("project.task", 7)
+            result = service(client=client).execute(
+                "get_mail_status", res_model="project.task", res_id=7
+            )
         self.assertEqual(result, ["shaped"])
         helper.assert_called_once_with(client, "project.task", 7)
 
@@ -304,7 +305,9 @@ class TestGetMailStatusCommand(unittest.TestCase):
         client, executor = _client(
             messages=[_message(101)], mails=[_mail(1, 101, "sent")]
         )
-        GetMailStatusCommand(client).execute("project.task", 42)
+        service(client=client).execute(
+            "get_mail_status", res_model="project.task", res_id=42
+        )
         methods = {method for _, method, _, _ in executor.calls}
         # Only read-only methods were issued — no create/write/unlink.
         self.assertTrue(methods <= {"search_read", "fields_get", "read"})
@@ -314,20 +317,18 @@ class TestGetMailStatusToolListing(unittest.TestCase):
     """The tool is registered on the MCP server's tool surface (issue #389)."""
 
     def test_tool_appears_in_server_listing(self):
-        from odoo_dev_core.commands import Registry
-        from odoo_dev_core.commands.builtin import register_builtins
         from odoo_mcp.server import OdooMCPServer
         from odoo_mcp.tools import build_explicit_tools
 
-        registry = register_builtins(Registry(MagicMock()))
-        tools = build_explicit_tools(registry)
+        command_service = service(client=MagicMock())
+        tools = build_explicit_tools(command_service)
         self.assertIn("get_mail_status", tools)
 
         added: list[Any] = []
         mock_mcp = MagicMock()
         mock_mcp.add_tool.side_effect = added.append
         with patch("odoo_mcp.server.FastMCP", return_value=mock_mcp):
-            OdooMCPServer(registry, explicit_tools=tools)
+            OdooMCPServer(command_service, explicit_tools=tools)
         self.assertIn("get_mail_status", {tool.name for tool in added})
 
 

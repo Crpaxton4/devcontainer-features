@@ -19,12 +19,11 @@ import unittest
 from typing import Any
 
 from odoo_client.client import OdooClient
-from odoo_dev_core.commands.builtin.task_note import TaskNoteCommand
-from odoo_dev_core.commands.command import MAX_CHATTER_BODY_CHARS
-from odoo_dev_core.commands.builtin.task_question import TaskQuestionCommand
+from odoo_dev_core.builtins._chatter import MAX_CHATTER_BODY_CHARS
 from odoo_dev_data.events import EventStore as TaskStateDB
 from odoo_client.transport.executor import OdooExecutor
 from ...support import make_event_store
+from ...fakes import service
 
 
 class _KeywordOnlyMessagePostExecutor(OdooExecutor):
@@ -117,13 +116,17 @@ class TestChatterCallersDriveKeywordOnlyMessagePost(unittest.TestCase):
     def test_task_note_drives_keyword_only_message_post(self):
         client, executor = _keyword_client()
         db = _tmp_db()
-        TaskNoteCommand(client, state=db).execute(1, "Note text")
+        service(client=client, events=db).execute(
+            "task_note", task_id=1, note="Note text"
+        )
         self._assert_recorded_keyword(executor, task_id=1, body="<p>Note text</p>")
 
     def test_task_question_drives_keyword_only_message_post(self):
         client, executor = _keyword_client()
         db = _tmp_db()
-        TaskQuestionCommand(client, state=db).execute(1, "Which approach?")
+        service(client=client, events=db).execute(
+            "task_question", task_id=1, question="Which approach?"
+        )
         self._assert_recorded_keyword(
             executor, task_id=1, body="<p>[?] Which approach?</p>"
         )
@@ -138,9 +141,10 @@ class TestChatterCallersDriveKeywordOnlyMessagePost(unittest.TestCase):
         client, executor = _keyword_client()
         db = _tmp_db()
         content = base64.b64encode(b"findings").decode("ascii")
-        result = TaskNoteCommand(client, state=db).execute(
-            1,
-            "Note with file",
+        result = service(client=client, events=db).execute(
+            "task_note",
+            task_id=1,
+            note="Note with file",
             attachments=[{"content": content, "name": "findings.md"}],
         )
         self.assertEqual(len(executor.created_attachments), 1)
@@ -155,8 +159,8 @@ class TestChatterCallersDriveKeywordOnlyMessagePost(unittest.TestCase):
         client, executor = _keyword_client()
         db = _tmp_db()
         with self.assertRaises(ValueError):
-            TaskNoteCommand(client, state=db).execute(
-                1, "x" * (MAX_CHATTER_BODY_CHARS + 1)
+            service(client=client, events=db).execute(
+                "task_note", task_id=1, note="x" * (MAX_CHATTER_BODY_CHARS + 1)
             )
         self.assertEqual(executor.recorded, {})
         self.assertEqual(executor.created_attachments, [])

@@ -32,6 +32,7 @@ from odoo_dev_core.billing.upload import (
     _round_to_step,
     upload_sessions,
 )
+from ..fakes import service
 from ..support import make_event_store
 
 UTC = timezone.utc
@@ -227,14 +228,14 @@ def _run_cli(
     """Drive ``main`` for ``argv`` against the seeded DB and fake transport."""
     out = StringIO()
     with (
-        patch(f"{_MOD}.TaskStateDB", return_value=db),
+        patch(
+            f"{_MOD}._build_service",
+            return_value=service(client=client, events=db, config=config),
+        ),
         patch(f"{_MOD}._assert_env"),
-        patch(f"{_MOD}.build_client", return_value=client),
-        patch(f"{_MOD}.LocalConfig") as local_config,
         patch("sys.stdout", out),
         patch("sys.argv", ["odoo-dev", *argv]),
     ):
-        local_config.load.return_value = config
         cli.main()
     return out.getvalue()
 
@@ -244,25 +245,22 @@ def _run_tui(
 ) -> tuple[int, int]:
     """Drive the seeded DB through the TUI ``u`` upload helper.
 
-    ``upload_sessions`` is patched only to inject ``config`` (the TUI helper does
-    not thread one), so the real shared billing path still runs — this proves the
+    The real shared billing path runs with the service's config - this proves the
     ``u`` key reaches the same minimum/rounding choke point.
     """
-    from odoo_dev_core.commands import Registry
-    from odoo_dev_core.commands.builtin import register_builtins
     from odoo_tui.app import TuiDeps, _upload_sessions
     from odoo_tui.window import DateWindow
 
-    registry = register_builtins(Registry(client, state_client=db, config=config))
-    deps = TuiDeps(registry=registry, client=client, store=db, config=config)
+    command_service = service(client=client, events=db, config=config)
+    deps = TuiDeps(service=command_service)
     window = DateWindow(date(2026, 6, 1), date(2026, 6, 7))
-    sessions = registry["query_sessions"].execute(
+    sessions = command_service.execute(
+        "query_sessions",
         start_date=window.start_iso(),
         end_date=window.end_iso(),
         include_events=True,
     )
-    with patch("odoo_dev_core.billing.upload.LocalConfig.load", return_value=config):
-        return _upload_sessions(deps, sessions, window)
+    return _upload_sessions(deps, sessions, window)
 
 
 class TestBillingEndToEnd(unittest.TestCase):

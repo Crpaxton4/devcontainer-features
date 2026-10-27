@@ -241,7 +241,7 @@ def upload_sessions(
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
     dry_run: bool = False,
-    config: Optional[LocalConfig] = None,
+    config: LocalConfig,
 ) -> dict[str, Any]:
     """Bill each derived session, then sweep orphaned upload mappings.
 
@@ -264,9 +264,7 @@ def upload_sessions(
     :param dry_run: When True, select and summarise but write nothing to Odoo.
     :param config: Resolved SDK settings supplying the per-session billing
         policy (``min_session_hours`` / ``round_session_hours``, issue #355).
-        When omitted it is loaded via :meth:`LocalConfig.load` so both entry
-        points (the TUI ``u`` key and ``odoo-dev upload``) pick up the file and
-        environment overrides automatically.
+        The caller supplies it; core never loads a config itself.
     :return: A summary dict with ``uploaded`` (billable session count),
         ``skipped`` (non-numeric-task sessions), ``failed`` (per-session
         ``{session_key, task_id, error}`` rows for sessions whose Odoo write
@@ -275,7 +273,6 @@ def upload_sessions(
         hours, timesheet_id}`` per successfully-billed session; ``hours`` is the
         policy-adjusted billed hours; ``timesheet_id`` is None on a dry run).
     """
-    config = config or LocalConfig.load()
     minimum = config.min_session_hours
     step = config.round_session_hours
     rows: list[dict[str, Any]] = []

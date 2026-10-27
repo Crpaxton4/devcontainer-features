@@ -15,10 +15,11 @@ import asyncio
 import unittest
 from unittest.mock import MagicMock, Mock, patch
 
-from odoo_dev_core.commands.command_registry import Registry
 from odoo_mcp import server
-from odoo_mcp.server import OdooMCPServer, _error_boundary, _error_payload
+from odoo_dev_core.telemetry import error_payload as _error_payload
+from odoo_mcp.server import OdooMCPServer, _error_boundary
 from odoo_client.transport.errors import OdooError, OdooValidationError
+from ..support import make_service
 
 # Each caught type paired with the exact payload the boundary must produce.
 _CAUGHT_CASES = [
@@ -47,7 +48,7 @@ def _async_raiser(exc):
 
 def _build_added(name, tool_fn):
     """Register one explicit tool and return the resulting FastMCP ``Tool``."""
-    registry = Registry(Mock())
+    registry = make_service(client=Mock())
     mock_mcp = MagicMock()
     added = []
     mock_mcp.add_tool.side_effect = added.append

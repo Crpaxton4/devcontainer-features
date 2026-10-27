@@ -22,7 +22,7 @@ from datetime import date, timedelta
 # Core and core-owned ports only (#718): the raw-event read goes through the
 # tracking façade (ADR-005 rule 4), the state store is the consumer-side
 # Protocol, and the window vocabulary is the promoted core module.
-from odoo_dev_core.commands.protocols import StateStore
+from odoo_dev_core.ports import StateStore
 from odoo_dev_core.sessionization import (
     SessionizationConfig,
     TimeEntry,

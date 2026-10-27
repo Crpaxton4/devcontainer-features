@@ -18,7 +18,7 @@ from unittest.mock import MagicMock, patch
 
 import odoo_cli.__main__ as cli
 from odoo_dev_data.events import EventRecord, EventStore
-from ..support import make_event_store
+from ..support import make_event_store, make_service
 
 _MOD = "odoo_cli.__main__"
 UTC = timezone.utc
@@ -93,14 +93,14 @@ def _run_cli(argv: list[str], db: EventStore, client: _RecordingOdooClient) -> s
     """Drive ``main`` for ``argv`` against the seeded DB and fake transport."""
     out = StringIO()
     with (
-        patch(f"{_MOD}.TaskStateDB", return_value=db),
+        patch(
+            f"{_MOD}._build_service",
+            return_value=make_service(db, client, _config()),
+        ),
         patch(f"{_MOD}._assert_env"),
-        patch(f"{_MOD}.build_client", return_value=client),
-        patch(f"{_MOD}.LocalConfig") as local_config,
         patch("sys.stdout", out),
         patch("sys.argv", ["odoo-dev", *argv]),
     ):
-        local_config.load.return_value = _config()
         cli.main()
     return out.getvalue()
 
@@ -177,8 +177,6 @@ class TestCmdUpload(unittest.TestCase):
         # the TUI 'u' loop and through headless `odoo-dev upload` produce the
         # IDENTICAL account.analytic.line wire calls, because both surfaces
         # share the one billing.upload.upload_sessions loop.
-        from odoo_dev_core.commands import Registry
-        from odoo_dev_core.commands.builtin import register_builtins
         from odoo_tui.app import TuiDeps, _upload_sessions
         from odoo_tui.window import DateWindow
 
@@ -190,14 +188,11 @@ class TestCmdUpload(unittest.TestCase):
         )
 
         tui_db, tui_client = _seed_db(), _RecordingOdooClient()
-        registry = register_builtins(
-            Registry(tui_client, state_client=tui_db, config=_config())
-        )
-        deps = TuiDeps(
-            registry=registry, client=tui_client, store=tui_db, config=_config()
-        )
+        service = make_service(tui_db, tui_client, _config())
+        deps = TuiDeps(service=service)
         window = DateWindow(date(2026, 6, 1), date(2026, 6, 7))
-        sessions = registry["query_sessions"].execute(
+        sessions = service.execute(
+            "query_sessions",
             start_date=window.start_iso(),
             end_date=window.end_iso(),
             include_events=True,

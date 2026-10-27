@@ -3,22 +3,14 @@
 import unittest
 from unittest.mock import MagicMock, patch
 
-from odoo_dev_core.commands.builtin.get_task import GetTaskCommand
-from odoo_dev_core.commands.builtin.get_task_attachments import (
-    GetTaskAttachmentsCommand,
-)
-from odoo_dev_core.commands.builtin.get_task_chatter import GetTaskChatterCommand
-from odoo_dev_core.commands.builtin.search_projects import SearchProjectsCommand
-from odoo_dev_core.commands.builtin.search_tasks import SearchTasksCommand
-from odoo_dev_core.commands.builtin.task_list import TaskListCommand
-from odoo_dev_core.commands.builtin.task_note import TaskNoteCommand
-from odoo_dev_core.commands.builtin.task_question import TaskQuestionCommand
-from odoo_dev_core.commands.command import MAX_CHATTER_BODY_CHARS
+from odoo_dev_core.builtins._chatter import MAX_CHATTER_BODY_CHARS
 from odoo_dev_data.events import EventStore as TaskStateDB
 from ...support import make_event_store
+from ...fakes import service
+from odoo_dev_core import default_registry
 
-_NOTE = "odoo_dev_core.commands.builtin.task_note"
-_QUESTION = "odoo_dev_core.commands.builtin.task_question"
+_NOTE = "odoo_dev_core.builtins.task_note"
+_QUESTION = "odoo_dev_core.builtins.task_question"
 
 
 def _tmp_db() -> TaskStateDB:
@@ -31,11 +23,6 @@ def _client(uid: int = 7) -> MagicMock:
     return c
 
 
-def _cmd_with_db(cmd_cls, client, db):
-    """Instantiate a command with an injected local state client (db)."""
-    return cmd_cls(client, state=db)
-
-
 # ── GetTaskChatterCommand ─────────────────────────────────────────────────────
 
 
@@ -44,32 +31,32 @@ class TestGetTaskChatterCommand(unittest.TestCase):
         client = _client()
         expected = [{"id": 1, "author": "Jane", "body": "Hello"}]
         with patch(
-            "odoo_dev_core.commands.builtin.get_task_chatter.get_task_chatter",
+            "odoo_dev_core.builtins.get_task_chatter.get_task_chatter",
             return_value=expected,
         ) as mock_chatter:
-            result = GetTaskChatterCommand(client).execute(task_id=42)
+            result = service(client=client).execute("get_task_chatter", task_id=42)
         mock_chatter.assert_called_once_with(client, 42, limit=100, since=None)
         self.assertEqual(result, expected)
 
     def test_passes_custom_limit(self):
         client = _client()
         with patch(
-            "odoo_dev_core.commands.builtin.get_task_chatter.get_task_chatter",
+            "odoo_dev_core.builtins.get_task_chatter.get_task_chatter",
             return_value=[],
         ) as mock_chatter:
-            GetTaskChatterCommand(client).execute(task_id=10, limit=5)
+            service(client=client).execute("get_task_chatter", task_id=10, limit=5)
         mock_chatter.assert_called_once_with(client, 10, limit=5, since=None)
 
     def test_passes_since_cursor(self):
         # #624: both cursor forms ride through to the helper untouched.
         client = _client()
         with patch(
-            "odoo_dev_core.commands.builtin.get_task_chatter.get_task_chatter",
+            "odoo_dev_core.builtins.get_task_chatter.get_task_chatter",
             return_value=[],
         ) as mock_chatter:
-            GetTaskChatterCommand(client).execute(task_id=10, since=77)
-            GetTaskChatterCommand(client).execute(
-                task_id=10, since="2026-06-20 10:30:00"
+            service(client=client).execute("get_task_chatter", task_id=10, since=77)
+            service(client=client).execute(
+                "get_task_chatter", task_id=10, since="2026-06-20 10:30:00"
             )
         mock_chatter.assert_any_call(client, 10, limit=100, since=77)
         mock_chatter.assert_any_call(client, 10, limit=100, since="2026-06-20 10:30:00")
@@ -83,20 +70,22 @@ class TestGetTaskAttachmentsCommand(unittest.TestCase):
         client = _client()
         expected = [{"id": 1, "name": "file.png", "source": "task"}]
         with patch(
-            "odoo_dev_core.commands.builtin.get_task_attachments.get_task_attachments",
+            "odoo_dev_core.builtins.get_task_attachments.get_task_attachments",
             return_value=expected,
         ) as mock_helper:
-            result = GetTaskAttachmentsCommand(client).execute(task_id=42)
+            result = service(client=client).execute("get_task_attachments", task_id=42)
         mock_helper.assert_called_once_with(client, 42, include_content=False)
         self.assertEqual(result, expected)
 
     def test_passes_include_content(self):
         client = _client()
         with patch(
-            "odoo_dev_core.commands.builtin.get_task_attachments.get_task_attachments",
+            "odoo_dev_core.builtins.get_task_attachments.get_task_attachments",
             return_value=[],
         ) as mock_helper:
-            GetTaskAttachmentsCommand(client).execute(task_id=10, include_content=True)
+            service(client=client).execute(
+                "get_task_attachments", task_id=10, include_content=True
+            )
         mock_helper.assert_called_once_with(client, 10, include_content=True)
 
 
@@ -108,14 +97,12 @@ class TestGetTaskCommand(unittest.TestCase):
         client = _client()
         with (
             patch(
-                "odoo_dev_core.commands.builtin.get_task.get_task_detail",
+                "odoo_dev_core.builtins.get_task.get_task_detail",
                 return_value=None,
             ),
-            patch(
-                "odoo_dev_core.commands.builtin.get_task.get_task_chatter"
-            ) as mock_chatter,
+            patch("odoo_dev_core.builtins.get_task.get_task_chatter") as mock_chatter,
         ):
-            result = GetTaskCommand(client).execute(task_id=999)
+            result = service(client=client).execute("get_task", task_id=999)
         self.assertIsNone(result)
         mock_chatter.assert_not_called()
 
@@ -125,15 +112,17 @@ class TestGetTaskCommand(unittest.TestCase):
         chatter_data = [{"id": 1, "author": "Jane", "body": "Note"}]
         with (
             patch(
-                "odoo_dev_core.commands.builtin.get_task.get_task_detail",
+                "odoo_dev_core.builtins.get_task.get_task_detail",
                 return_value=task_data,
             ),
             patch(
-                "odoo_dev_core.commands.builtin.get_task.get_task_chatter",
+                "odoo_dev_core.builtins.get_task.get_task_chatter",
                 return_value=chatter_data,
             ),
         ):
-            result = GetTaskCommand(client).execute(task_id=42, include=["chatter"])
+            result = service(client=client).execute(
+                "get_task", task_id=42, include=["chatter"]
+            )
         self.assertEqual(result["chatter"], chatter_data)
         self.assertEqual(result["name"], "Feature X")
 
@@ -142,14 +131,12 @@ class TestGetTaskCommand(unittest.TestCase):
         task_data = {"task_id": 42, "name": "Feature X", "description": "Do it"}
         with (
             patch(
-                "odoo_dev_core.commands.builtin.get_task.get_task_detail",
+                "odoo_dev_core.builtins.get_task.get_task_detail",
                 return_value=task_data,
             ) as mock_detail,
-            patch(
-                "odoo_dev_core.commands.builtin.get_task.get_task_chatter"
-            ) as mock_chatter,
+            patch("odoo_dev_core.builtins.get_task.get_task_chatter") as mock_chatter,
         ):
-            result = GetTaskCommand(client).execute(task_id=42)
+            result = service(client=client).execute("get_task", task_id=42)
         self.assertNotIn("chatter", result)
         mock_chatter.assert_not_called()
         mock_detail.assert_called_once_with(client, 42, include=None)
@@ -158,15 +145,17 @@ class TestGetTaskCommand(unittest.TestCase):
         client = _client()
         with (
             patch(
-                "odoo_dev_core.commands.builtin.get_task.get_task_detail",
+                "odoo_dev_core.builtins.get_task.get_task_detail",
                 return_value={"task_id": 7, "name": "T"},
             ) as mock_detail,
             patch(
-                "odoo_dev_core.commands.builtin.get_task.get_task_chatter",
+                "odoo_dev_core.builtins.get_task.get_task_chatter",
                 return_value=[],
             ) as mock_chatter,
         ):
-            GetTaskCommand(client).execute(task_id=7, include=["subtasks", "chatter"])
+            service(client=client).execute(
+                "get_task", task_id=7, include=["subtasks", "chatter"]
+            )
         mock_detail.assert_called_once_with(client, 7, include=["subtasks", "chatter"])
         mock_chatter.assert_called_once_with(client, 7)
 
@@ -178,7 +167,7 @@ class TestTaskListCommand(unittest.TestCase):
     def test_searches_without_filters(self):
         client = _client()
         client.execute.return_value = [{"id": 1, "name": "Bug fix"}]
-        result = TaskListCommand(client).execute()
+        result = service(client=client).execute("task_list")
         client.execute.assert_called_once()
         call = client.execute.call_args
         domain = call.args[2]
@@ -188,7 +177,7 @@ class TestTaskListCommand(unittest.TestCase):
     def test_applies_stage_filter(self):
         client = _client()
         client.execute.return_value = []
-        TaskListCommand(client).execute(stage="Done")
+        service(client=client).execute("task_list", stage="Done")
         call = client.execute.call_args
         domain = call.args[2]
         self.assertIn(("stage_id.name", "ilike", "Done"), domain)
@@ -197,11 +186,13 @@ class TestTaskListCommand(unittest.TestCase):
         client = _client()
         with (
             patch(
-                "odoo_dev_core.commands.builtin.task_list.name_search_projects",
+                "odoo_dev_core.builtins.task_list.name_search_projects",
                 return_value=[],
             ),
         ):
-            result = TaskListCommand(client).execute(project_name_query="xyz")
+            result = service(client=client).execute(
+                "task_list", project_name_query="xyz"
+            )
         self.assertEqual(result, [])
 
     def test_adds_project_id_filter_when_found(self):
@@ -209,11 +200,11 @@ class TestTaskListCommand(unittest.TestCase):
         client.execute.return_value = []
         with (
             patch(
-                "odoo_dev_core.commands.builtin.task_list.name_search_projects",
+                "odoo_dev_core.builtins.task_list.name_search_projects",
                 return_value=[{"id": 5, "name": "Acct"}],
             ),
         ):
-            TaskListCommand(client).execute(project_name_query="Acct")
+            service(client=client).execute("task_list", project_name_query="Acct")
         call = client.execute.call_args
         domain = call.args[2]
         self.assertIn(("project_id", "in", [5]), domain)
@@ -221,7 +212,7 @@ class TestTaskListCommand(unittest.TestCase):
     def test_respects_limit(self):
         client = _client()
         client.execute.return_value = []
-        TaskListCommand(client).execute(limit=5)
+        service(client=client).execute("task_list", limit=5)
         call = client.execute.call_args
         self.assertEqual(call.kwargs["limit"], 5)
 
@@ -248,7 +239,9 @@ class TestTaskNoteCommand(unittest.TestCase):
             _detail("Bug"),
             patch(f"{_NOTE}.post_chatter_note", return_value=55) as mock_post,
         ):
-            result = _cmd_with_db(TaskNoteCommand, client, db).execute(1, "Note text")
+            result = service(client=client, events=db).execute(
+                "task_note", task_id=1, note="Note text"
+            )
         mock_post.assert_called_once_with(client, 1, "Note text", attachment_ids=None)
         self.assertEqual(
             result, {"task_name": "Bug", "message_id": 55, "note": "Note text"}
@@ -262,7 +255,9 @@ class TestTaskNoteCommand(unittest.TestCase):
             patch(f"{_NOTE}.post_chatter_note") as mock_post,
         ):
             with self.assertRaises(ValueError) as ctx:
-                _cmd_with_db(TaskNoteCommand, client, db).execute(404, "Note")
+                service(client=client, events=db).execute(
+                    "task_note", task_id=404, note="Note"
+                )
         self.assertIn("404", str(ctx.exception))
         mock_post.assert_not_called()
 
@@ -271,7 +266,9 @@ class TestTaskNoteCommand(unittest.TestCase):
         client = _client()
         db = _tmp_db()
         with _detail(), patch(f"{_NOTE}.post_chatter_note", return_value=1):
-            _cmd_with_db(TaskNoteCommand, client, db).execute(1, "progress note")
+            service(client=client, events=db).execute(
+                "task_note", task_id=1, note="progress note"
+            )
         self.assertEqual(db.get_events(), [])
 
     def test_attachments_created_and_linked_to_post(self):
@@ -285,8 +282,8 @@ class TestTaskNoteCommand(unittest.TestCase):
             patch(f"{_NOTE}.create_attachments", return_value=[91, 92]) as mock_create,
             patch(f"{_NOTE}.post_chatter_note", return_value=55) as mock_post,
         ):
-            result = _cmd_with_db(TaskNoteCommand, client, db).execute(
-                1, "Deliverables attached", attachments=specs
+            result = service(client=client, events=db).execute(
+                "task_note", task_id=1, note="Deliverables attached", attachments=specs
             )
         mock_create.assert_called_once_with(
             client, specs, res_model="project.task", res_id=1
@@ -304,7 +301,9 @@ class TestTaskNoteCommand(unittest.TestCase):
         db = _tmp_db()
         with _detail(), patch(f"{_NOTE}.post_chatter_note") as mock_post:
             with self.assertRaises(ValueError) as ctx:
-                _cmd_with_db(TaskNoteCommand, client, db).execute(1, over)
+                service(client=client, events=db).execute(
+                    "task_note", task_id=1, note=over
+                )
         message = str(ctx.exception)
         self.assertIn(str(len(over)), message)
         self.assertIn("500", message)
@@ -316,7 +315,9 @@ class TestTaskNoteCommand(unittest.TestCase):
         db = _tmp_db()
         note = "y" * MAX_CHATTER_BODY_CHARS
         with _detail(), patch(f"{_NOTE}.post_chatter_note", return_value=56) as post:
-            result = _cmd_with_db(TaskNoteCommand, client, db).execute(1, note)
+            result = service(client=client, events=db).execute(
+                "task_note", task_id=1, note=note
+            )
         post.assert_called_once_with(client, 1, note, attachment_ids=None)
         self.assertEqual(result["message_id"], 56)
 
@@ -328,15 +329,15 @@ class TestTaskNoteCommand(unittest.TestCase):
     def test_description_advertises_the_500_char_limit(self):
         # The limit must be visible to MCP callers up front: the command
         # description (which becomes the tool description) names it.
-        self.assertIn("500", TaskNoteCommand._description)
+        self.assertIn("500", default_registry().get("task_note").description)
 
     def test_description_states_attachment_audience(self):
-        description = TaskNoteCommand._description
+        description = default_registry().get("task_note").description
         self.assertIn("CLIENT-VISIBLE", description)
         self.assertIn("deliverables the client asked", description)
 
     def test_description_has_no_run_vocabulary(self):
-        description = TaskNoteCommand._description
+        description = default_registry().get("task_note").description
         self.assertNotIn("interim", description)
         self.assertNotIn("tracking session", description)
 
@@ -346,8 +347,8 @@ class TestTaskNoteCommand(unittest.TestCase):
         client = _client()
         db = _tmp_db()
         with _detail(), patch(f"{_NOTE}.post_chatter_note", return_value=55) as post:
-            result = _cmd_with_db(TaskNoteCommand, client, db).execute(
-                1, "Once only", dedupe_key="note-abc"
+            result = service(client=client, events=db).execute(
+                "task_note", task_id=1, note="Once only", dedupe_key="note-abc"
             )
         post.assert_called_once()
         self.assertEqual(result["message_id"], 55)
@@ -365,9 +366,10 @@ class TestTaskNoteCommand(unittest.TestCase):
             patch(f"{_NOTE}.create_attachments") as mock_create,
             patch(f"{_NOTE}.post_chatter_note") as mock_post,
         ):
-            result = _cmd_with_db(TaskNoteCommand, client, db).execute(
-                1,
-                "Once only",
+            result = service(client=client, events=db).execute(
+                "task_note",
+                task_id=1,
+                note="Once only",
                 attachments=[{"path": "/tmp/a.md"}],
                 dedupe_key="note-abc",
             )
@@ -384,8 +386,8 @@ class TestTaskNoteCommand(unittest.TestCase):
         db = _tmp_db()
         db.record_chatter_dedupe(1, "shared-key", 55)
         with _detail(), patch(f"{_NOTE}.post_chatter_note", return_value=66) as post:
-            result = _cmd_with_db(TaskNoteCommand, client, db).execute(
-                2, "Other task", dedupe_key="shared-key"
+            result = service(client=client, events=db).execute(
+                "task_note", task_id=2, note="Other task", dedupe_key="shared-key"
             )
         post.assert_called_once()
         self.assertEqual(result["message_id"], 66)
@@ -396,8 +398,12 @@ class TestTaskNoteCommand(unittest.TestCase):
         client = _client()
         db = _tmp_db()
         with _detail(), patch(f"{_NOTE}.post_chatter_note", return_value=55) as post:
-            first = _cmd_with_db(TaskNoteCommand, client, db).execute(1, "Twice")
-            second = _cmd_with_db(TaskNoteCommand, client, db).execute(1, "Twice")
+            first = service(client=client, events=db).execute(
+                "task_note", task_id=1, note="Twice"
+            )
+            second = service(client=client, events=db).execute(
+                "task_note", task_id=1, note="Twice"
+            )
         self.assertEqual(post.call_count, 2)
         self.assertNotIn("deduplicated", first)
         self.assertNotIn("deduplicated", second)
@@ -412,8 +418,8 @@ class TestTaskNoteCommand(unittest.TestCase):
             patch(f"{_NOTE}.post_chatter_note", side_effect=RuntimeError("odoo down")),
         ):
             with self.assertRaises(RuntimeError):
-                _cmd_with_db(TaskNoteCommand, client, db).execute(
-                    1, "Kept note", dedupe_key="retry-me"
+                service(client=client, events=db).execute(
+                    "task_note", task_id=1, note="Kept note", dedupe_key="retry-me"
                 )
         self.assertIsNone(db.get_chatter_dedupe(1, "retry-me"))
 
@@ -429,8 +435,8 @@ class TestTaskQuestionCommand(unittest.TestCase):
             _q_detail("Bug"),
             patch(f"{_QUESTION}.post_chatter_note", return_value=77) as mock_post,
         ):
-            result = _cmd_with_db(TaskQuestionCommand, client, db).execute(
-                1, "Which approach?"
+            result = service(client=client, events=db).execute(
+                "task_question", task_id=1, question="Which approach?"
             )
         mock_post.assert_called_once_with(client, 1, "[?] Which approach?")
         self.assertEqual(
@@ -446,14 +452,18 @@ class TestTaskQuestionCommand(unittest.TestCase):
             patch(f"{_QUESTION}.post_chatter_note") as mock_post,
         ):
             with self.assertRaises(ValueError):
-                _cmd_with_db(TaskQuestionCommand, client, db).execute(404, "Q?")
+                service(client=client, events=db).execute(
+                    "task_question", task_id=404, question="Q?"
+                )
         mock_post.assert_not_called()
 
     def test_writes_nothing_to_the_local_store(self):
         client = _client()
         db = _tmp_db()
         with _q_detail(), patch(f"{_QUESTION}.post_chatter_note", return_value=1):
-            _cmd_with_db(TaskQuestionCommand, client, db).execute(1, "which?")
+            service(client=client, events=db).execute(
+                "task_question", task_id=1, question="which?"
+            )
         self.assertEqual(db.get_events(), [])
 
     def test_rejects_question_over_the_chatter_cap(self):
@@ -462,7 +472,9 @@ class TestTaskQuestionCommand(unittest.TestCase):
         db = _tmp_db()
         with _q_detail(), patch(f"{_QUESTION}.post_chatter_note") as mock_post:
             with self.assertRaises(ValueError) as ctx:
-                _cmd_with_db(TaskQuestionCommand, client, db).execute(1, over)
+                service(client=client, events=db).execute(
+                    "task_question", task_id=1, question=over
+                )
         self.assertIn("500", str(ctx.exception))
         mock_post.assert_not_called()
 
@@ -471,22 +483,28 @@ class TestTaskQuestionCommand(unittest.TestCase):
         db = _tmp_db()
         question = "q" * MAX_CHATTER_BODY_CHARS
         with _q_detail(), patch(f"{_QUESTION}.post_chatter_note", return_value=9):
-            result = _cmd_with_db(TaskQuestionCommand, client, db).execute(1, question)
+            result = service(client=client, events=db).execute(
+                "task_question", task_id=1, question=question
+            )
         self.assertEqual(result["message_id"], 9)
 
     def test_description_advertises_the_500_char_limit(self):
-        self.assertIn("500", TaskQuestionCommand._description)
+        self.assertIn("500", default_registry().get("task_question").description)
 
     def test_description_has_no_state_machine_vocabulary(self):
-        self.assertNotIn("AWAITING_ANSWERS", TaskQuestionCommand._description)
-        self.assertNotIn("watermark", TaskQuestionCommand._description)
+        self.assertNotIn(
+            "AWAITING_ANSWERS", default_registry().get("task_question").description
+        )
+        self.assertNotIn(
+            "watermark", default_registry().get("task_question").description
+        )
 
     def test_dedupe_miss_posts_and_records_key(self):
         client = _client()
         db = _tmp_db()
         with _q_detail(), patch(f"{_QUESTION}.post_chatter_note", return_value=88):
-            result = _cmd_with_db(TaskQuestionCommand, client, db).execute(
-                1, "Which?", dedupe_key="q-abc"
+            result = service(client=client, events=db).execute(
+                "task_question", task_id=1, question="Which?", dedupe_key="q-abc"
             )
         self.assertEqual(result["message_id"], 88)
         self.assertFalse(result["deduplicated"])
@@ -497,8 +515,8 @@ class TestTaskQuestionCommand(unittest.TestCase):
         db = _tmp_db()
         db.record_chatter_dedupe(1, "q-abc", 88)
         with _q_detail(), patch(f"{_QUESTION}.post_chatter_note") as mock_post:
-            result = _cmd_with_db(TaskQuestionCommand, client, db).execute(
-                1, "Which?", dedupe_key="q-abc"
+            result = service(client=client, events=db).execute(
+                "task_question", task_id=1, question="Which?", dedupe_key="q-abc"
             )
         mock_post.assert_not_called()
         self.assertEqual(result["message_id"], 88)
@@ -508,7 +526,9 @@ class TestTaskQuestionCommand(unittest.TestCase):
         client = _client()
         db = _tmp_db()
         with _q_detail(), patch(f"{_QUESTION}.post_chatter_note", return_value=5):
-            result = _cmd_with_db(TaskQuestionCommand, client, db).execute(1, "Q?")
+            result = service(client=client, events=db).execute(
+                "task_question", task_id=1, question="Q?"
+            )
         self.assertNotIn("deduplicated", result)
 
 
@@ -519,29 +539,31 @@ class TestSearchProjectsCommand(unittest.TestCase):
     def test_delegates_to_name_search_projects(self):
         client = _client()
         with patch(
-            "odoo_dev_core.commands.builtin.search_projects.name_search_projects",
+            "odoo_dev_core.builtins.search_projects.name_search_projects",
             return_value=[{"id": 5, "name": "Accounting"}],
         ) as mock_search:
-            result = SearchProjectsCommand(client).execute("Acc")
+            result = service(client=client).execute("search_projects", query="Acc")
         mock_search.assert_called_once_with(client, "Acc", limit=10)
         self.assertEqual(result, [{"id": 5, "name": "Accounting"}])
 
     def test_passes_custom_limit(self):
         client = _client()
         with patch(
-            "odoo_dev_core.commands.builtin.search_projects.name_search_projects",
+            "odoo_dev_core.builtins.search_projects.name_search_projects",
             return_value=[],
         ) as mock_search:
-            SearchProjectsCommand(client).execute("x", limit=3)
+            service(client=client).execute("search_projects", query="x", limit=3)
         mock_search.assert_called_once_with(client, "x", limit=3)
 
     def test_returns_empty_list_when_no_matches(self):
         client = _client()
         with patch(
-            "odoo_dev_core.commands.builtin.search_projects.name_search_projects",
+            "odoo_dev_core.builtins.search_projects.name_search_projects",
             return_value=[],
         ):
-            self.assertEqual(SearchProjectsCommand(client).execute("nope"), [])
+            self.assertEqual(
+                service(client=client).execute("search_projects", query="nope"), []
+            )
 
 
 # ── SearchTasksCommand ────────────────────────────────────────────────────────
@@ -551,20 +573,24 @@ class TestSearchTasksCommand(unittest.TestCase):
     def test_delegates_to_name_search_tasks_with_project_scope(self):
         client = _client()
         with patch(
-            "odoo_dev_core.commands.builtin.search_tasks.name_search_tasks",
+            "odoo_dev_core.builtins.search_tasks.name_search_tasks",
             return_value=[{"id": 10, "name": "Fix VAT"}],
         ) as mock_search:
-            result = SearchTasksCommand(client).execute("VAT", project_id=5)
+            result = service(client=client).execute(
+                "search_tasks", query="VAT", project_id=5
+            )
         mock_search.assert_called_once_with(client, "VAT", 5, limit=10)
         self.assertEqual(result, [{"id": 10, "name": "Fix VAT"}])
 
     def test_passes_custom_limit(self):
         client = _client()
         with patch(
-            "odoo_dev_core.commands.builtin.search_tasks.name_search_tasks",
+            "odoo_dev_core.builtins.search_tasks.name_search_tasks",
             return_value=[],
         ) as mock_search:
-            SearchTasksCommand(client).execute("x", project_id=1, limit=2)
+            service(client=client).execute(
+                "search_tasks", query="x", project_id=1, limit=2
+            )
         mock_search.assert_called_once_with(client, "x", 1, limit=2)
 
 

@@ -2,10 +2,11 @@ import unittest
 from datetime import datetime, timezone
 from unittest.mock import MagicMock
 
-from odoo_dev_core.commands.builtin import OptimizeSessionsCommand
-from odoo_dev_core.commands.builtin.optimize_sessions import _build_config, _parse_date
+from odoo_dev_core.builtins.optimize_sessions import _build_config, _parse_date
 from odoo_dev_data.events import EventRecord, EventStore
 from ...support import make_event_store
+from ...fakes import service
+from odoo_dev_core import default_registry
 
 UTC = timezone.utc
 
@@ -44,13 +45,13 @@ class TestConfigHelpers(unittest.TestCase):
 
 class TestOptimizeSessionsCommand(unittest.TestCase):
     def _command(self, state):
-        return OptimizeSessionsCommand(client=MagicMock(), state=state)
+        return service(client=MagicMock(), events=state)
 
     def test_returns_summary(self):
         state = _tmp_state()
         _seed(state)
         result = self._command(state).execute(
-            start_date="2026-06-01", end_date="2026-06-01"
+            "optimize_sessions", start_date="2026-06-01", end_date="2026-06-01"
         )
         self.assertEqual(result["event_count"], 3)
         self.assertGreaterEqual(result["best_gap_mins"], 30)
@@ -61,15 +62,15 @@ class TestOptimizeSessionsCommand(unittest.TestCase):
         state = _tmp_state()
         _seed(state)
         result = self._command(state).execute(
-            start_date="2026-06-01", end_date="2026-06-01"
+            "optimize_sessions", start_date="2026-06-01", end_date="2026-06-01"
         )
         self.assertEqual(len(state.get_events()), 3)  # events untouched
         self.assertNotIn("persisted_windows", result)
 
     def test_metadata(self):
-        cmd = self._command(_tmp_state())
-        self.assertEqual(cmd.name, "optimize_sessions")
-        self.assertTrue(cmd.description)
+        spec = default_registry().get("optimize_sessions")
+        self.assertEqual(spec.id, "optimize_sessions")
+        self.assertTrue(spec.description)
 
 
 if __name__ == "__main__":

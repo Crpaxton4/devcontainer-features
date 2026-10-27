@@ -12,17 +12,17 @@ import unittest
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
-from odoo_dev_core.commands.builtin import BUILTIN_COMMANDS, UnloggedTimeReportCommand
-from odoo_dev_core.commands.command_registry import Registry
 from odoo_mcp.tools import build_explicit_tools
 from odoo_mcp.tools.atomic import make_unlogged_time_report_tool
 from odoo_dev_data.config import LocalConfig
 from odoo_dev_data.events import EventRecord
 from odoo_client.transport.errors import OdooTransportError
 from ...support import make_event_store
+from ...fakes import service
+from odoo_dev_core import default_registry
 
 UTC = timezone.utc
-_HELPER = "odoo_dev_core.commands.builtin.unlogged_time_report.unlogged_time_report"
+_HELPER = "odoo_dev_core.builtins.unlogged_time_report.unlogged_time_report"
 
 
 def _config() -> LocalConfig:
@@ -119,18 +119,15 @@ def _state_with_sessions():
 
 
 def _run(state, client, **kwargs):
-    return UnloggedTimeReportCommand(client, state=state, config=_config()).execute(
-        "2026-07-01", "2026-07-02", **kwargs
+    return service(client=client, events=state, config=_config()).execute(
+        "unlogged_time_report", start_date="2026-07-01", end_date="2026-07-02", **kwargs
     )
 
 
 class TestUnloggedTimeReport(unittest.TestCase):
     def test_registered_under_its_name(self):
-        self.assertIs(
-            BUILTIN_COMMANDS["unlogged_time_report"], UnloggedTimeReportCommand
-        )
         self.assertEqual(
-            UnloggedTimeReportCommand(MagicMock()).name, "unlogged_time_report"
+            default_registry().get("unlogged_time_report").id, "unlogged_time_report"
         )
 
     def test_nonzero_delta_rows_only_by_default(self):
@@ -374,10 +371,14 @@ class TestUnloggedTimeReport(unittest.TestCase):
 
     def test_command_delegates_to_helper_with_all_arguments(self):
         client = MagicMock()
-        cmd = UnloggedTimeReportCommand(client, state=MagicMock(), config=MagicMock())
+        cmd = service(client=client, events=MagicMock(), config=MagicMock())
         with patch(_HELPER, return_value={"ok": True}) as helper:
             result = cmd.execute(
-                "2026-07-01", "2026-07-15", only_mine=False, include_all=True
+                "unlogged_time_report",
+                start_date="2026-07-01",
+                end_date="2026-07-15",
+                only_mine=False,
+                include_all=True,
             )
         self.assertEqual(result, {"ok": True})
         self.assertEqual(helper.call_args.args[3:], ("2026-07-01", "2026-07-15"))
@@ -388,10 +389,7 @@ class TestUnloggedTimeReport(unittest.TestCase):
 
 class TestUnloggedTimeReportMcpTool(unittest.TestCase):
     def test_registered_in_the_explicit_tool_surface(self):
-        registry = Registry(MagicMock())
-        for name, command in BUILTIN_COMMANDS.items():
-            registry.register(name, command)
-        tools = build_explicit_tools(registry)
+        tools = build_explicit_tools(service(client=MagicMock()))
         self.assertIn("unlogged_time_report", tools)
 
     def test_tool_routes_to_the_command(self):
@@ -403,11 +401,9 @@ class TestUnloggedTimeReportMcpTool(unittest.TestCase):
             ]
         )
 
-        class _Reg:
-            def __getitem__(self, name):
-                return UnloggedTimeReportCommand(client, state=state, config=_config())
-
-        tool = make_unlogged_time_report_tool(_Reg())
+        tool = make_unlogged_time_report_tool(
+            service(client=client, events=state, config=_config())
+        )
         report = tool("2026-07-01", "2026-07-02")
         self.assertEqual(report["start_date"], "2026-07-01")
         self.assertEqual(report["total_delta_hours"], 2.25)

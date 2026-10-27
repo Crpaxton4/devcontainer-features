@@ -16,10 +16,6 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 
 from odoo_client.client import OdooClient
-from odoo_dev_core.commands.builtin import BUILTIN_COMMANDS
-from odoo_dev_core.commands.builtin.search_knowledge_articles import (
-    SearchKnowledgeArticlesCommand,
-)
 from odoo_client.transport.errors import OdooAccessError, OdooServerError
 from odoo_client.transport.executor import OdooExecutor
 from odoo_dev_core.services.knowledge import (
@@ -28,6 +24,8 @@ from odoo_dev_core.services.knowledge import (
     _article_snippet,
     search_knowledge_articles,
 )
+from ...fakes import service
+from odoo_dev_core import default_registry
 
 _SEARCH_FIELDS = ["id", "name", "body", "write_date"]
 _SEARCH_DOMAIN = ["|", ("name", "ilike", "vat"), ("body", "ilike", "vat")]
@@ -227,26 +225,24 @@ class TestSearchKnowledgeArticlesCommand(unittest.TestCase):
     """The built-in command registers and delegates to the helper."""
 
     def test_registered_under_name(self):
-        self.assertIn("search_knowledge_articles", BUILTIN_COMMANDS)
-        self.assertIs(
-            BUILTIN_COMMANDS["search_knowledge_articles"],
-            SearchKnowledgeArticlesCommand,
-        )
+        self.assertIn("search_knowledge_articles", default_registry().ids())
 
     def test_execute_delegates_query_and_limit(self):
         client = MagicMock()
         target = (
-            "odoo_dev_core.commands.builtin.search_knowledge_articles."
+            "odoo_dev_core.builtins.search_knowledge_articles."
             "search_knowledge_articles"
         )
         with patch(target, return_value=["shaped"]) as helper:
-            result = SearchKnowledgeArticlesCommand(client).execute("vat", limit=7)
+            result = service(client=client).execute(
+                "search_knowledge_articles", query="vat", limit=7
+            )
         self.assertEqual(result, ["shaped"])
         helper.assert_called_once_with(client, "vat", limit=7)
 
     def test_execute_defaults_are_read_only_search(self):
         client, executor = _client([_article()])
-        SearchKnowledgeArticlesCommand(client).execute("vat")
+        service(client=client).execute("search_knowledge_articles", query="vat")
         # A single read-only search_read, no ir.model probe and no writes.
         methods = [method for _, method, _, _ in executor.calls]
         self.assertEqual(methods, ["search_read"])

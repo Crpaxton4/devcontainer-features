@@ -2,14 +2,14 @@ import asyncio
 import unittest
 from unittest.mock import MagicMock, Mock, patch
 
-from odoo_dev_core.commands.command_registry import Registry
 from odoo_mcp.server import OdooMCPServer
+from ..support import make_service
 
 INSTRUCTIONS = "Provides tools for interacting with Odoo ERP"
 
 
 def _registry():
-    return Registry(Mock())
+    return make_service(client=Mock())
 
 
 def _build_with_mock_mcp(registry, explicit_tools=None):
@@ -23,11 +23,11 @@ def _build_with_mock_mcp(registry, explicit_tools=None):
 
 
 class TestServerConstruction(unittest.TestCase):
-    def test_stores_registry(self):
-        registry = _registry()
+    def test_stores_service(self):
+        service = _registry()
         with patch("odoo_mcp.server.FastMCP"):
-            server = OdooMCPServer(registry)
-        self.assertIs(server.registry, registry)
+            server = OdooMCPServer(service)
+        self.assertIs(server.service, service)
 
     def test_creates_fastmcp_with_name_and_instructions(self):
         with patch("odoo_mcp.server.FastMCP") as MockFastMCP:
