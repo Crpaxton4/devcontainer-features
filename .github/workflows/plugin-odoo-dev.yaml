@@ -194,9 +194,11 @@ jobs:
       # on the ubuntu-latest image, so this step installs nothing — it fails the
       # job loudly if that ever stops being true, instead of letting the suite
       # fall back to its SKIP branch and report success having checked nothing.
+      # The step above put the workspace .venv first on PATH, so `python` is the
+      # uv interpreter (no pip inside); psycopg2 goes into that venv through uv.
       - name: "psycopg2, and a postgres the suite can actually reach"
         run: |
-          python -m pip install --quiet psycopg2-binary
+          uv pip install --quiet psycopg2-binary
           python -c 'import psycopg2; print("psycopg2", psycopg2.__version__)'
           for bin in psql createdb dropdb pg_isready; do
             command -v "$bin" >/dev/null || {
