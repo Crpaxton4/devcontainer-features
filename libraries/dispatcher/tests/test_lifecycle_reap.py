@@ -55,6 +55,8 @@ def test_exec_command_line_is_section_eight_exactly(settings):
     assert "--verbose" in rest
     assert json.loads(rest[rest.index("--json-schema") + 1])["required"][0] == "summary"
     assert rest[rest.index("--permission-mode") + 1] == "dontAsk"
+    allowed = [rest[i + 1] for i, arg in enumerate(rest) if arg == "--allowedTools"]
+    assert allowed == ["Bash", "Read", "Edit", "Write", "Skill", "mcp__odoo-mcp"]
     denied = [rest[i + 1] for i, arg in enumerate(rest) if arg == "--disallowedTools"]
     assert denied == [
         "Bash(docker:*)",

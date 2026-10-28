@@ -64,6 +64,12 @@ DISALLOWED_TOOLS = (
     f"Edit(/{CONTAINER_CLAUDE_HOME}/**)",
     f"Write(/{CONTAINER_CLAUDE_HOME}/**)",
 )
+#: The tools the implement run works with. Under ``dontAsk`` a tool with no allow
+#: rule is denied, and the mounted user settings allow almost nothing, so the run
+#: names its own. A deny rule (``DISALLOWED_TOOLS``, the user settings) still wins,
+#: and the guard hook still runs. ``render_exec`` passes each rule as its own
+#: ``--allowedTools`` argument.
+ALLOWED_TOOLS = ("Bash", "Read", "Edit", "Write", "Skill", "mcp__odoo-mcp")
 UNATTENDED_VARIABLE = "ODOO_UNATTENDED"
 HOME_VARIABLE = "ODOO_DEV_HOME"
 JOB_ID_VARIABLE = "ODOO_JOB_ID"
@@ -261,6 +267,7 @@ def render_exec(
         schema_argument(),
         "--permission-mode",
         "dontAsk",
+        *[arg for rule in ALLOWED_TOOLS for arg in ("--allowedTools", rule)],
         *[arg for rule in DISALLOWED_TOOLS for arg in ("--disallowedTools", rule)],
     ]
 
