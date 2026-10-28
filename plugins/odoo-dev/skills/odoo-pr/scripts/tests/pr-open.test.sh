@@ -90,8 +90,13 @@ if called "pr ready"; then fail=$((fail+1)); echo "FAIL --draft must not drag a 
 
 # ---------- manifest bump, once per PR ----------------------------------------
 # A module repo with base branch `main`. gitq runs git with local hooks disabled.
+# The identity lives in the repo config: pr-open.sh commits the bump with plain
+# `git`, and a CI runner has no global user.email to fall back on.
 mrepo="$work/mrepo"
 git init --quiet -b main "$mrepo"
+git -C "$mrepo" config user.email t@e.invalid
+git -C "$mrepo" config user.name t
+git -C "$mrepo" config core.hooksPath "$work/no-hooks"
 gitq() { git -C "$mrepo" -c core.hooksPath="$work/no-hooks" -c user.email=t@e.invalid -c user.name=t "$@" >/dev/null 2>&1; }
 manifest() { printf "{\n    'name': 'fixture',\n    'version': '%s',\n}\n" "$2" > "$1"; }
 mkdir -p "$mrepo/m1" "$mrepo/m2"
