@@ -1,5 +1,5 @@
 {
-    ".": "8.2.0",
+    ".": "9.0.0",
     "devcontainer-features/src/second-brain": "1.1.1",
     "devcontainer-features/src/debian-eol-archives": "1.1.0",
     "libraries/dispatcher": "9.2.0",
