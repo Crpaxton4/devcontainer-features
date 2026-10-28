@@ -1265,7 +1265,7 @@ check "the shipped env keys land (#811)" bash -c \
 # ODOO_DEV_HOME is delivered through containerEnv, not through this fragment;
 # shipping it here too would give one value two owners.
 check "the fragment ships no ODOO_DEV_HOME (#811)" bash -c \
-  "[ \"\$(jq -r '.env.ODOO_DEV_HOME // \"absent\"'/usr/local/share/personal-features/settings-fragment.json)\" = 'absent' ]"
+  "[ \"\$(jq -r '.env.ODOO_DEV_HOME // \"absent\"' /usr/local/share/personal-features/settings-fragment.json)\" = 'absent' ]"
 check "the fragment carries no secret-looking key (#811)" bash -c \
   "! grep -qiE '\"[^\"]*(token|secret|password|api[_-]?key)[^\"]*\"[[:space:]]*:' /usr/local/share/personal-features/settings-fragment.json"
 check "the shipped autoMode.environment lands (#811)" bash -c \
