@@ -58,6 +58,22 @@ COPY libraries /src/libraries
 RUN uv pip install --system --no-cache \
     /src/libraries/odoo_dev_data /src/libraries/usage_log /src/libraries/dispatcher
 
+# Compose runs this stage as the host UID:GID, so give them a name: the
+# devcontainer CLI reads the user name (os.userInfo, then `id -u -n`) and fails
+# without one. The home is the host HOME, where compose mounts a tmpfs.
+ARG ODOO_ORCHESTRATOR_UID
+ARG ODOO_ORCHESTRATOR_GID
+ARG ODOO_ORCHESTRATOR_HOME
+RUN : "${ODOO_ORCHESTRATOR_UID:?build through compose.yaml}" \
+        "${ODOO_ORCHESTRATOR_GID:?build through compose.yaml}" \
+        "${ODOO_ORCHESTRATOR_HOME:?build through compose.yaml}" \
+    && { getent group "$ODOO_ORCHESTRATOR_GID" >/dev/null \
+        || groupadd --gid "$ODOO_ORCHESTRATOR_GID" orchestrator; } \
+    && { getent passwd "$ODOO_ORCHESTRATOR_UID" >/dev/null \
+        || useradd --uid "$ODOO_ORCHESTRATOR_UID" --gid "$ODOO_ORCHESTRATOR_GID" \
+            --home-dir "$ODOO_ORCHESTRATOR_HOME" --no-create-home --no-log-init \
+            --shell /bin/bash orchestrator; }
+
 # The web UI reads the job rows through dispatcher.reporting, so it installs
 # odoo_dev_data, usage_log and dispatcher first, then apps/webui.
 # The container user is set by compose (a numeric uid), so no USER line here.
