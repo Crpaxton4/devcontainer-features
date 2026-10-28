@@ -9,6 +9,10 @@ Start it through `plugins/odoo-orchestrator/scripts/dispatch.sh`.
 
 Docker with the compose plugin. Nothing else: Python, Node, the devcontainer CLI,
 git and gh are in the image. The image builds on the first `up` or `run`.
+The dispatcher image names the host UID:GID and HOME at build time (the
+devcontainer CLI needs a user name). `up` does not rebuild an existing image,
+so run `docker compose -f stack/compose.yaml build dispatcher orchestrator`
+after one of them changes.
 
 ## Variables
 
