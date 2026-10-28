@@ -1,5 +1,16 @@
 # Changelog
 
+## [9.0.0](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v8.2.0...personal-features-v9.0.0) (2026-10-28)
+
+
+### ⚠ BREAKING CHANGES
+
+* **personal-features:** the Feature mounts one state root, ODOO_DEV_HOME (~/.config/odoo-dev -> /usr/local/share/odoo-dev). The odoo-sdk-config, odoo-task-tracker and usage-log mounts and their environment variables are gone; the installed tools are the suite 9.0 wheels (odoo-dev, odoo-mcp, odoo-tui, usage-log). Run odoo-dev doctor --migrate on the host once before the first rebuild.
+
+### Features
+
+* **personal-features:** ship suite 9.0 with one state root and Node 24 pinned ([#1281](https://github.com/Crpaxton4/devcontainer-features/issues/1281)) ([88e72aa](https://github.com/Crpaxton4/devcontainer-features/commit/88e72aa1bc59358c0f4777cf514e3975a0418736))
+
 ## [8.2.0](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v8.1.0...personal-features-v8.2.0) (2026-10-26)
 
 
