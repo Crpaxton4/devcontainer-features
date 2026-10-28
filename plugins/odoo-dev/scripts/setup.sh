@@ -219,28 +219,14 @@ fi
 # takes from the [model_ids] section of its config rather than by reading
 # ir.model (#444, #686). Ship without the project.task entry and the default call
 # — schedule_activity with only res_id — fails at the END of a task, which is the
-# worst possible moment to discover a config gap. Read-only, and read the way the
-# SDK reads it: $ODOO_SDK_CONFIG (file or directory), then ./.odoo_client.*, then
-# ~/.config/odoo_client. ODOO_MODEL_IDS counts too — it is the documented override.
+# worst possible moment to discover a config gap. Read-only, and read where the
+# suite reads it: $ODOO_DEV_HOME/config.toml (state-dir.sh). ODOO_MODEL_IDS counts
+# too — it is the documented override.
 MODEL_IDS_STEP="odoo-dev cmd get_models --args '{\"persist\": [\"project.task\"]}'   # writes the id into [model_ids]"
 
 sdk_config_path() {
-  local candidate="${ODOO_SDK_CONFIG:-}" f
-  if [ -n "$candidate" ]; then
-    if [ -d "$candidate" ]; then
-      for f in config.toml config.ini; do
-        [ -f "$candidate/$f" ] && { printf '%s' "$candidate/$f"; return 0; }
-      done
-      return 1
-    fi
-    [ -f "$candidate" ] && { printf '%s' "$candidate"; return 0; }
-    return 1
-  fi
-  for f in ./.odoo_client.toml ./.odoo_client.ini \
-           "$HOME/.config/odoo_client/config.toml" "$HOME/.config/odoo_client/config.ini"; do
-    [ -f "$f" ] && { printf '%s' "$f"; return 0; }
-  done
-  return 1
+  [ -f "$STATE_DIR/config.toml" ] || return 1
+  printf '%s' "$STATE_DIR/config.toml"
 }
 
 # has_project_task_id <config file> — every spelling the SDK loader accepts: a
@@ -278,7 +264,7 @@ sdk_config="$(sdk_config_path || true)"
 if [ -n "$model_ids_state" ]; then
   pass sdk-model-ids "project.task supplied by ODOO_MODEL_IDS"
 elif [ -z "$sdk_config" ]; then
-  fail sdk-model-ids "no Odoo SDK config file found (\$ODOO_SDK_CONFIG, ./.odoo_client.*, ~/.config/odoo_client) — schedule_activity has nowhere to read the project.task ir.model id from" \
+  fail sdk-model-ids "no config.toml in $STATE_DIR — schedule_activity has nowhere to read the project.task ir.model id from" \
     "$MODEL_IDS_STEP"
 elif has_project_task_id "$sdk_config"; then
   pass sdk-model-ids "[model_ids] project.task in $sdk_config"

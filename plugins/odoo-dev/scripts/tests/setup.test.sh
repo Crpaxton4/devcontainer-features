@@ -286,7 +286,7 @@ hasnt "in container: the repos tree is not a failure"   "$miss" repos
 T="$(newtmp)"; BIN="$T/bin"
 mkbin "$BIN" node git python3
 stub_gh_authed "$BIN"; stub_coderabbit_authed "$BIN"; stub_mcp_config "$T/cfg"
-out="$(env -u ODOO_SDK_CONFIG -u ODOO_MODEL_IDS PATH="$BIN" HOME="$T/home" \
+out="$(env -u ODOO_MODEL_IDS PATH="$BIN" HOME="$T/home" \
        ODOO_DEV_HOME="$T/state" CLAUDE_CONFIG_DIR="$T/cfg" \
        timeout 60 bash "$SETUP" --check 2>/dev/null)"
 json="$(printf '%s' "$out" | tail -1)"
@@ -295,20 +295,20 @@ has     "no sdk config: sdk-model-ids named in missing[]" "$(jarr "$json" missin
 has_sub "no sdk config: manual_steps carries the get_models command" \
         "$(jarr "$json" manual_steps)" "odoo-dev cmd get_models --args"
 
-mkdir -p "$T/sdk"
+mkdir -p "$T/state"
 printf '[connection]\nurl = "https://x"\n\n[model_ids]\n"project.task" = 71\n' \
-  > "$T/sdk/config.toml"
+  > "$T/state/config.toml"
 out="$(env -u ODOO_MODEL_IDS PATH="$BIN" HOME="$T/home" ODOO_DEV_HOME="$T/state" \
-       CLAUDE_CONFIG_DIR="$T/cfg" ODOO_SDK_CONFIG="$T/sdk" \
+       CLAUDE_CONFIG_DIR="$T/cfg" \
        timeout 60 bash "$SETUP" --check 2>/dev/null)"
 json="$(printf '%s' "$out" | tail -1)"
 assert_shape "sdk config with the entry" "$json"
 hasnt "sdk config with the entry: sdk-model-ids is not a failure" \
       "$(jarr "$json" missing)" sdk-model-ids
-if [ "$(cat "$T/sdk/config.toml")" = "$(printf '[connection]\nurl = "https://x"\n\n[model_ids]\n"project.task" = 71\n')" ]; then
+if [ "$(cat "$T/state/config.toml")" = "$(printf '[connection]\nurl = "https://x"\n\n[model_ids]\n"project.task" = 71\n')" ]; then
   ok "sdk config with the entry: the config file is read, never written"
 else
-  bad "sdk config with the entry: setup.sh modified $T/sdk/config.toml"
+  bad "sdk config with the entry: setup.sh modified $T/state/config.toml"
 fi
 
 # --- 8. usage --------------------------------------------------------------------------
