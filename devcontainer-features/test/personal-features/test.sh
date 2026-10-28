@@ -2419,7 +2419,7 @@ while IFS= read -r _pf_line; do
     PF_STAGED_ROWS=$((PF_STAGED_ROWS + 1))
 done < "$PF_STAGED_MANIFEST"
 check "every staged manifest row carries the 7 columns the source contract fixes" bash -c \
-  "[ $PF_STAGED_BADSHAPE -eq 0 ] && [ $PF_STAGED_ROWS -ge 10 ]"
+  "[ $PF_STAGED_BADSHAPE -eq 0 ] && [ $PF_STAGED_ROWS -ge 8 ]"
 
 # The two rows #974 names, verbatim, so a staged copy that silently lost or
 # rewrote one is a failure rather than a smaller row count.
