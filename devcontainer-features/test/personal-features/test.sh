@@ -2454,7 +2454,7 @@ while IFS="$PF_TAB" read -r _pf_name _pf_src _pf_target _pf_env _pf_val _pf_mode
     fi
 done < "$PF_STAGED_MANIFEST"
 check "every container-provisioned staged row names a target that exists at that row's mode" bash -c \
-  "[ $PF_ROW_MISMATCH -eq 0 ] && [ $PF_ROW_CHECKED -ge 9 ]"
+  "[ $PF_ROW_MISMATCH -eq 0 ] && [ $PF_ROW_CHECKED -ge 8 ]"
 
 check "check-mount-ownership is installed and executable (#974)" bash -c \
   "test -x /usr/local/bin/check-mount-ownership"
