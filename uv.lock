@@ -1078,7 +1078,7 @@ wheels = [
 
 [[package]]
 name = "dispatcher"
-version = "9.0.0"
+version = "9.1.0"
 source = { editable = "libraries/dispatcher" }
 dependencies = [
     { name = "odoo-dev-data" },
@@ -2551,7 +2551,7 @@ wheels = [
 
 [[package]]
 name = "odoo-cli"
-version = "9.0.0"
+version = "9.1.0"
 source = { editable = "apps/odoo_cli" }
 dependencies = [
     { name = "odoo-dev-core" },
@@ -2562,7 +2562,7 @@ requires-dist = [{ name = "odoo-dev-core", editable = "libraries/odoo_dev_core" 
 
 [[package]]
 name = "odoo-client"
-version = "9.0.0"
+version = "9.1.0"
 source = { editable = "libraries/odoo_client" }
 
 [package.dev-dependencies]
@@ -2619,7 +2619,7 @@ test = [
 
 [[package]]
 name = "odoo-dev-core"
-version = "9.0.0"
+version = "9.1.0"
 source = { editable = "libraries/odoo_dev_core" }
 dependencies = [
     { name = "markdown-it-py" },
@@ -2638,7 +2638,7 @@ requires-dist = [
 
 [[package]]
 name = "odoo-dev-data"
-version = "9.0.0"
+version = "9.1.0"
 source = { editable = "libraries/odoo_dev_data" }
 
 [package.metadata]
@@ -2646,7 +2646,7 @@ requires-dist = [{ name = "tomli", marker = "python_full_version < '3.11'", spec
 
 [[package]]
 name = "odoo-mcp"
-version = "9.0.0"
+version = "9.1.0"
 source = { editable = "apps/odoo_mcp" }
 dependencies = [
     { name = "fastmcp" },
@@ -2663,7 +2663,7 @@ requires-dist = [
 
 [[package]]
 name = "odoo-tui"
-version = "9.0.0"
+version = "9.1.0"
 source = { editable = "apps/odoo_tui" }
 dependencies = [
     { name = "odoo-dev-core" },
@@ -4072,7 +4072,7 @@ wheels = [
 
 [[package]]
 name = "usage-log"
-version = "9.0.0"
+version = "9.1.0"
 source = { editable = "libraries/usage_log" }
 
 [package.dev-dependencies]
@@ -4312,7 +4312,7 @@ wheels = [
 
 [[package]]
 name = "webui"
-version = "9.0.0"
+version = "9.1.0"
 source = { editable = "apps/webui" }
 dependencies = [
     { name = "dispatcher" },
