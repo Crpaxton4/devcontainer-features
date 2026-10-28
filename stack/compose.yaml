@@ -13,6 +13,11 @@ services:
       context: ..
       dockerfile: stack/Dockerfile
       target: dispatcher
+      # The image names the user that `user:` below runs as (see the Dockerfile).
+      args:
+        ODOO_ORCHESTRATOR_UID: "${ODOO_ORCHESTRATOR_UID:?run through dispatch.sh, or set ODOO_ORCHESTRATOR_UID to id -u}"
+        ODOO_ORCHESTRATOR_GID: "${ODOO_ORCHESTRATOR_GID:?run through dispatch.sh, or set ODOO_ORCHESTRATOR_GID to id -g}"
+        ODOO_ORCHESTRATOR_HOME: "${HOME:?HOME must be set}"
     # Resume form: it exits when no job is PENDING or RUNNING.
     command: ["dispatch", "run"]
     restart: "no"
@@ -61,6 +66,10 @@ services:
       context: ..
       dockerfile: stack/Dockerfile
       target: dispatcher
+      args:
+        ODOO_ORCHESTRATOR_UID: "${ODOO_ORCHESTRATOR_UID:?run through dispatch.sh, or set ODOO_ORCHESTRATOR_UID to id -u}"
+        ODOO_ORCHESTRATOR_GID: "${ODOO_ORCHESTRATOR_GID:?run through dispatch.sh, or set ODOO_ORCHESTRATOR_GID to id -g}"
+        ODOO_ORCHESTRATOR_HOME: "${HOME:?HOME must be set}"
     restart: "no"
     init: true
     user: "${ODOO_ORCHESTRATOR_UID:?run through dispatch.sh, or set ODOO_ORCHESTRATOR_UID to id -u}:${ODOO_ORCHESTRATOR_GID:?run through dispatch.sh, or set ODOO_ORCHESTRATOR_GID to id -g}"
