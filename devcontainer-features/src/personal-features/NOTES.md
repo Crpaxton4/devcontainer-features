@@ -21,6 +21,10 @@
 
 This Feature `dependsOn` the official Node.js Feature, so it's installed automatically even if a consumer only adds `personal-features` (e.g. via `dev.containers.defaultFeatures`) — npm installs Claude Code, so a base image's own system Node can't be relied on (some base images, like Odoo's, bundle an ancient one ahead of it on PATH; `install.sh` also hard-fails with a clear error if it ends up on Node <18 for any reason).
 
+**The `dependsOn` entry pins Node 24 (`{ "version": "24" }`), and a consumer that declares the Node Feature itself must declare the same value or drop the entry.** Node 26.13.0 became `lts/*` on 2026-10-28, and its binary needs `libatomic.so.1`, which no `odoo:*` image ships; the node Feature installs no apt package for it, so an `"lts"` request now fails the build on every Odoo base with `node: error while loading shared libraries: libatomic.so.1`. The CLI treats two references to one Feature with different options as two installs, so a consumer's own `"lts"` entry still pulls Node 26 next to the pinned 24 — the same rule as the `moby: false` note below. Drop the pin when the Odoo images ship `libatomic1` or the node Feature installs it.
+
+**Suite 9.0 moved every store into one state root.** The Feature mounts `~/.config/odoo-dev` at `/usr/local/share/odoo-dev` (`ODOO_DEV_HOME`); the `odoo-sdk-config`, `odoo-task-tracker` and `usage-log` mounts are gone. Before the first rebuild on a host that ran the 8.x Feature, install `odoo-dev` on the host and run `odoo-dev doctor --migrate` once: it imports `~/.config/odoo_sdk`, the tracker and dispatcher databases, the repo map, the orchestrator home and the usage log into the state root, deletes nothing, and is a no-op on a second run.
+
 Optionally pair it with the official GitHub CLI Feature too, so `gh auth login` has something to persist:
 
 ```jsonc

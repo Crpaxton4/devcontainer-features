@@ -3,16 +3,17 @@
         "image": "mcr.microsoft.com/devcontainers/base:ubuntu",
         "features": {
             "ghcr.io/devcontainers/features/node:1": {
-                "version": "lts"
+                "version": "24"
             },
             "ghcr.io/devcontainers/features/github-cli:1": {},
             "personal-features": {}
         },
         "remoteUser": "vscode"
     },
-    // The odoo images pin Node 24: Node 26 became lts/* on 2026-10-28 and its
+    // Every scenario pins Node 24, the same value as the Feature's dependsOn, so
+    // the CLI installs Node once. Node 26 became lts/* on 2026-10-28 and its
     // binary needs libatomic.so.1, which no odoo image ships (the node Feature
-    // installs no apt package for it). The ubuntu scenario above stays on lts.
+    // installs no apt package for it).
     "on_odoo_base_image": {
         "image": "odoo:19",
         "features": {
