@@ -32,17 +32,19 @@ def jobs(
     with JobStore(home=home) as store:
         if batch_id is not None:
             found = store.list_by_batch(batch_id)
-        elif state is not None:
-            found = store.list_by_state(state)
         else:
-            found = [j for s in JobState for j in store.list_by_state(s)]
-    if state is not None:
-        found = [j for j in found if j.state == state]
-    if task_id is not None:
-        found = [j for j in found if j.task_id == str(task_id)]
+            states = [state] if state is not None else list(JobState)
+            found = [j for s in states for j in store.list_by_state(s)]
+    found = [j for j in found if _matches(j, state, task_id)]
     if batch_id is not None:
         return found  # the store's insertion order
     return sorted(found, key=lambda j: (j.submitted_us, j.job_id))
+
+
+def _matches(job: Job, state: JobState | None, task_id: str | None) -> bool:
+    if state is not None and job.state != state:
+        return False
+    return task_id is None or job.task_id == str(task_id)
 
 
 def queue(home: Path) -> list[Job]:
