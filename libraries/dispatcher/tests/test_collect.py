@@ -8,14 +8,61 @@ from odoo_dev_data.home import job_bundle_dir
 from odoo_dev_data.jobs import DeadReason, JobState, JobStore, RunOutcome
 
 from dispatcher import collect, queue
+from dispatcher.schema import usable_structured
 from .support import GOOD, stream, write_task_record
 
+FORK = "forked-command-odoo-dev:implement"
 
-def _parse(lines):
-    parser = collect.StreamParser()
+
+def _parse(lines, entry=""):
+    parser = collect.StreamParser(entry)
     for line in lines:
         parser.feed(line)
     return parser
+
+
+def _fork_answer(value, parent=FORK, is_error=False):
+    """The two fork events of a StructuredOutput call, as Claude Code 2.1.295 streams them."""
+    call = {"type": "tool_use", "id": "t1", "name": "StructuredOutput", "input": value}
+    reply = {"type": "tool_result", "tool_use_id": "t1", "is_error": is_error}
+    return [
+        json.dumps(
+            {"type": t, "message": {"content": [b]}, "parent_tool_use_id": parent}
+        )
+        for t, b in (("assistant", call), ("user", reply))
+    ]
+
+
+def test_the_entry_fork_answer_fills_an_envelope_without_one():
+    init, result = stream()
+    parser = _parse([init, *_fork_answer(GOOD), result], "/odoo-dev:implement")
+    assert usable_structured(parser.envelope) == GOOD
+    assert json.loads(parser.envelope_text)["structured_output"] == GOOD
+
+
+@pytest.mark.parametrize(
+    "events,entry",
+    [
+        (_fork_answer(GOOD, is_error=True), "/odoo-dev:implement"),  # rejected call
+        (
+            _fork_answer(GOOD, parent="forked-command-odoo-dev:pr"),
+            "/odoo-dev:implement",
+        ),
+        (_fork_answer(GOOD), ""),  # no entry: nothing is watched
+    ],
+)
+def test_no_fork_answer_is_adopted_unless_accepted_from_the_entry_fork(events, entry):
+    init, result = stream()
+    parser = _parse([init, *events, result], entry)
+    assert usable_structured(parser.envelope) is None
+    assert "structured_output" not in json.loads(parser.envelope_text)
+
+
+def test_the_envelope_answer_wins_over_the_fork_answer():
+    init, result = stream(structured=GOOD)
+    other = {**GOOD, "summary": "fork"}
+    parser = _parse([init, *_fork_answer(other), result], "/odoo-dev:implement")
+    assert usable_structured(parser.envelope) == GOOD
 
 
 @pytest.fixture
