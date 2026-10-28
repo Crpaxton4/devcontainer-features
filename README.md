@@ -64,12 +64,16 @@ the official Node.js and GitHub CLI Features.
 {
     "image": "mcr.microsoft.com/devcontainers/base:ubuntu",
     "features": {
-        "ghcr.io/devcontainers/features/node:1": { "version": "lts" },
+        "ghcr.io/devcontainers/features/node:1": { "version": "24" },
         "ghcr.io/devcontainers/features/github-cli:1": {},
         "ghcr.io/<owner>/<repo>/personal-features:1": {}
     }
 }
 ```
+
+The Feature's own `dependsOn` pins Node 24, and the example matches it so the
+CLI installs Node once. Node 26 (`lts` since 2026-10-28) needs `libatomic.so.1`,
+which the `odoo:*` images do not ship, so its Feature fails to install there.
 
 The Feature wraps `claude` so a default session runs `claude --ide`. Subcommands
 such as `claude mcp` pass through untouched.
