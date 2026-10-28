@@ -25,7 +25,7 @@ Call `EnterPlanMode`. The rest of this procedure runs in plan mode: read-only,
 research through Explore agents, the plan file is the only file written.
 
 1. get_task with description and chatter → the project name. Skill
-   `odoo-dev:odoo-repo-map` → `odoo_version`, `default_branch`.
+   `odoo-dev:odoo-repo-map` → `odoo_version`, `base_branch`.
 2. Sibling tasks and knowledge articles → the house estimate standard and comparables.
 3. Only when the request cannot be split into 2 to 5 capabilities: Skill
    `odoo-dev:discovery-notes`, once.
@@ -36,7 +36,7 @@ research through Explore agents, the plan file is the only file written.
 7. Skill `odoo-dev:estimate`: adopt → an exclusion; adopt + delta → the gap only.
 8. Only when the request asks for a design doc: Skill `odoo-dev:odoo-design-doc`.
 
-Plan file sections, in this order: `## Context` (project, repo, `default_branch`,
+Plan file sections, in this order: `## Context` (project, repo, `base_branch`,
 `odoo_version`), `## Prior art` (one block per capability), `## Acceptance criteria`
 (numbered), `## Plan` (numbered `step` / `verify` pairs), `## Estimate` (the estimate
 skill output), `## Assumptions and open questions`, `## Design doc` (path or `none`).

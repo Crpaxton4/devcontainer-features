@@ -10,11 +10,14 @@
         },
         "remoteUser": "vscode"
     },
+    // The odoo images pin Node 24: Node 26 became lts/* on 2026-10-28 and its
+    // binary needs libatomic.so.1, which no odoo image ships (the node Feature
+    // installs no apt package for it). The ubuntu scenario above stays on lts.
     "on_odoo_base_image": {
         "image": "odoo:19",
         "features": {
             "ghcr.io/devcontainers/features/node:1": {
-                "version": "lts"
+                "version": "24"
             },
             "ghcr.io/itsmechlark/features/postgresql:1": {},
             "personal-features": {}
@@ -24,7 +27,7 @@
     "on_odoo18_base_image": {
         "image": "odoo:18",
         "features": {
-            "ghcr.io/devcontainers/features/node:1": { "version": "lts" },
+            "ghcr.io/devcontainers/features/node:1": { "version": "24" },
             "ghcr.io/itsmechlark/features/postgresql:1": {},
             "personal-features": {}
         },
@@ -33,7 +36,7 @@
     "on_odoo17_base_image": {
         "image": "odoo:17",
         "features": {
-            "ghcr.io/devcontainers/features/node:1": { "version": "lts" },
+            "ghcr.io/devcontainers/features/node:1": { "version": "24" },
             "ghcr.io/itsmechlark/features/postgresql:1": {},
             "personal-features": {}
         },
@@ -53,7 +56,7 @@
     "on_odoo16_base_image": {
         "build": { "dockerfile": "Dockerfile" },
         "features": {
-            "ghcr.io/devcontainers/features/node:1": { "version": "lts" },
+            "ghcr.io/devcontainers/features/node:1": { "version": "24" },
             "personal-features": {}
         },
         "remoteUser": "root"

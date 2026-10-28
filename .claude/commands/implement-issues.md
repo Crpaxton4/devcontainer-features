@@ -359,14 +359,14 @@ One template, filled per worker.
     and fails with SC1072/SC1073 (#1001); and the Feature has only installed
     the binary since #1001, so a container built before that has none and the
     pinned 0.10.0 tarball `install_shellcheck` fetches in `install.sh` is the
-    fallback. For changes under `libraries/odoo_sdk`, add `make static`, run
-    from `libraries/odoo_sdk`: it runs `black --check`, the internal
+    fallback. For changes under `libraries/odoo_client`, add `make static`, run
+    from `libraries/odoo_client`: it runs `black --check`, the internal
     root-import check, `lint-imports`, radon, and complexipy with
-    `max-complexity-allowed = 15` from `libraries/odoo_sdk/pyproject.toml`,
+    `max-complexity-allowed = 15` from `libraries/odoo_client/pyproject.toml`,
     and one function over 15 is a hard fail on the `Static Analysis` job — it
     passed every other gate twice (#954, #958) and was caught only in CI.
     From a worktree it must be run as
-    `make -C <abs worktree path>/libraries/odoo_sdk static` so it resolves
+    `make -C <abs worktree path>/libraries/odoo_client static` so it resolves
     that checkout's `src/`, for the reason the next bullet gives about pytest.
   - **Worktrees do not isolate the Python environment.** Every worker resolves
     the same `.venv` from the main checkout, so one worker running `uv sync`
@@ -376,8 +376,8 @@ One template, filled per worker.
     which only rewrites the lockfile. `uv sync` is not the only writer: a plain
     `uv run` re-syncs the project environment implicitly on every call, and so
     does `make static`, whose `PYTHON_CMD` is `uv run python`
-    (`libraries/odoo_sdk/Makefile:9`). Each such call rewrites the editable
-    `odoo_sdk` install to point at the calling worktree's `src/` — on #1003 and
+    (`libraries/odoo_client/Makefile:9`). Each such call rewrites the editable
+    `odoo_client` install to point at the calling worktree's `src/` — on #1003 and
     #1005 both workers logged `Uninstalled 1 package / Installed 1 package` on
     the way into their gates. The run itself stays correct, for the
     `pythonpath` and conftest reasons the next paragraph gives; what moves under
@@ -385,13 +385,13 @@ One template, filled per worker.
 
     Reads resolve to the main checkout too, which is the half that bites
     silently: the SDK's editable install is one absolute path into
-    `/workspaces/devcontainer-features/libraries/odoo_sdk/src`, so `import
-    odoo_sdk` from any worktree lands on **main's** source unless the run says
-    otherwise. Run the SDK's pytest from `<abs worktree path>/libraries/odoo_sdk`
+    `/workspaces/devcontainer-features/libraries/odoo_client/src`, so `import
+    odoo_client` from any worktree lands on **main's** source unless the run says
+    otherwise. Run the SDK's pytest from `<abs worktree path>/libraries/odoo_client`
     — the ini `pythonpath` there pins that checkout's `src/` — or put
-    `PYTHONPATH=<abs worktree path>/libraries/odoo_sdk/src` on the *same command
+    `PYTHONPATH=<abs worktree path>/libraries/odoo_client/src` on the *same command
     line* as pytest, since exported environment does not survive between Bash
-    calls. The session-scoped guard in `libraries/odoo_sdk/tests/conftest.py`
+    calls. The session-scoped guard in `libraries/odoo_client/tests/conftest.py`
     fails the run loudly when neither holds; a test-only diff would otherwise
     produce a false PASS against source the run never imported.
   - Do not merge, do not force-push, do not touch another worker's branch.
@@ -555,15 +555,15 @@ worktree list of 40 entries was the normal state.
 Then re-point the shared venv at the main checkout and confirm it:
 
 ```bash
-uv run --directory /workspaces/devcontainer-features/libraries/odoo_sdk \
-  python -c 'import odoo_sdk; print(odoo_sdk.__file__)'
+uv run --directory /workspaces/devcontainer-features/libraries/odoo_client \
+  python -c 'import odoo_client; print(odoo_client.__file__)'
 ```
 
 The printed path must be under
-`/workspaces/devcontainer-features/libraries/odoo_sdk/src`. If any worker ran
+`/workspaces/devcontainer-features/libraries/odoo_client/src`. If any worker ran
 `uv run` or `make static` from its worktree, the shared `.venv`'s editable
-`odoo_sdk` install points into a directory the reap just deleted (Phase 5), and
-every later `import odoo_sdk` that does not pin `pythonpath` fails. That
+`odoo_client` install points into a directory the reap just deleted (Phase 5), and
+every later `import odoo_client` that does not pin `pythonpath` fails. That
 command is itself the re-sync that fixes it, so a correct path printed once is
 the whole check.
 

@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}Job {{ entry.job_id }}{% endblock %}
+{% block content %}
+<h1>Job {{ entry.job_id }}</h1>
+<table>
+  {% for key, value in entry.items() %}
+  <tr><th>{{ key }}</th><td>{{ value }}</td></tr>
+  {% endfor %}
+</table>
+
+<h2>Structured output</h2>
+{% if structured != "null" %}
+<pre>{{ structured }}</pre>
+{% else %}
+<p class="empty">No structured output is stored for this job.</p>
+{% endif %}
+
+<h2>Bundle files</h2>
+{% if files %}
+<ul>
+  {% for f in files %}
+  <li><a href="{{ url_for('jobs.bundle_file', job_id=entry.job_id, name=f) }}">{{ f }}</a></li>
+  {% endfor %}
+</ul>
+{% else %}
+<p class="empty">No bundle file exists for this job.</p>
+{% endif %}
+{% endblock %}

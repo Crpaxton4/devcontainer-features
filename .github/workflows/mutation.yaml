@@ -17,7 +17,7 @@ on:
 
 defaults:
   run:
-    working-directory: libraries/odoo_sdk
+    working-directory: libraries/odoo_client
 
 # Fixed context name that the branch ruleset marks required. Kept in one place
 # so this workflow and the reporter workflow cannot drift apart.
@@ -39,7 +39,7 @@ jobs:
       - name: Resolve PR head SHA
         id: pr
         # Runs before checkout, so it must not inherit the job-level
-        # libraries/odoo_sdk working directory (it does not exist yet).
+        # libraries/odoo_client working directory (it does not exist yet).
         working-directory: ${{ github.workspace }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -81,7 +81,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: mutation-report
-          path: libraries/odoo_sdk/reports/mutation/
+          path: libraries/odoo_client/reports/mutation/
 
       # Enforce the floor. The gate exits non-zero below the floor, but we mask
       # that here with `|| true` so the status + issue steps always run; the
@@ -93,7 +93,7 @@ jobs:
         id: gate
         run: |
           # Stdlib-only CI helper; no venv needed. Path is repo-root-relative
-          # because the working directory is libraries/odoo_sdk.
+          # because the working directory is libraries/odoo_client.
           python3 "$GITHUB_WORKSPACE/.github/scripts/mutation_gate.py" \
             --survivors-file reports/mutation/survivors.md \
             reports/mutation/mutation.json >> "$GITHUB_OUTPUT" || true

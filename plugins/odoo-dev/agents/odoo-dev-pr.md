@@ -18,7 +18,7 @@ effort: high
 Task route, through `<ARTIFACT> get <ARTIFACTS> <section>`, where `ARTIFACT` and
 `ARTIFACTS` are the lines of your prompt:
 
-- `build` (required): `worktree`, `branch`, `modules`, `default_branch`.
+- `build` (required): `worktree`, `branch`, `modules`, `base_branch`.
 - `test` (one entry per module in `build.modules`) and `review`: evidence, not gates.
   An absent one is reported in line 3.
 

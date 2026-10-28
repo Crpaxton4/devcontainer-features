@@ -5,7 +5,7 @@ manifest/JSON pair and rejects each way the two can diverge (missing mount, extr
 mount, wrong/absent env var) - plus an integration test asserting the *real*
 repo files are actually in sync, which is what makes this catch drift under
 ``unittest discover``. The gate is a CI-only helper and must NOT depend on the
-``odoo_sdk`` package, so this imports it directly by path from the same directory.
+``odoo_client`` package, so this imports it directly by path from the same directory.
 """
 
 import importlib.util

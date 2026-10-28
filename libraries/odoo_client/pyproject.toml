@@ -1,0 +1,97 @@
+[build-system]
+requires = ["setuptools>=83.0.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "odoo_client"
+version = "9.0.0"
+description = "Python SDK for Odoo XML-RPC and JSON-2 access: transport, client, records, query, fields and env."
+requires-python = ">=3.10"
+dependencies = []
+
+[dependency-groups]
+static-analysis = [
+    "black>=26.5.1",
+    "complexipy>=6.0.1",
+    "import-linter>=2.3",
+    "pygount>=3.2.0",
+    "radon>=6.0.1",
+]
+test = [
+    "coverage[toml]>=7.15.2",
+    "hypothesis>=6.157.1",
+    "cosmic-ray>=8.4.6",
+]
+dev = [
+    {include-group = "static-analysis"},
+    {include-group = "test"},
+    "pytest>=9.1.1",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"*" = ["py.typed"]
+
+[tool.black]
+target-version = ["py310"]
+
+[tool.coverage.run]
+branch = true
+source = ["src/odoo_client"]
+
+[tool.coverage.report]
+fail_under = 90
+show_missing = true
+skip_covered = false
+exclude_lines = [
+    "pragma: no cover",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+]
+
+[tool.coverage.html]
+directory = "reports/coverage/html"
+
+[tool.coverage.json]
+output = "reports/coverage/coverage.json"
+pretty_print = true
+
+[tool.radon]
+exclude = "tests/*"
+cc_min = "A"
+show_complexity = true
+average = true
+show_mi = true
+
+[tool.complexipy]
+paths = ["src"]
+max-complexity-allowed = 15
+exclude = ["tests", "build", "htmlcov"]
+output-format = ["json"]
+output = "reports/complexipy/"
+
+# Layering of the client's own packages. `errors` is the kernel facade that
+# re-exports the transport error taxonomy, so it stays out of the layer map.
+[tool.importlinter]
+root_packages = ["odoo_client"]
+
+[[tool.importlinter.contracts]]
+name = "odoo_client: exhaustive layer map"
+type = "layers"
+containers = ["odoo_client"]
+exhaustive = true
+exhaustive_ignores = ["errors"]
+layers = [
+    "records : query",
+    "client",
+    "transport : fields : env",
+    "_utils : settings",
+]
+ignore_imports = [
+    # permanent: the client is the adapter behind the RpcClient port, and
+    # OdooRecordset is that port's return type.
+    "odoo_client.client.client -> odoo_client.records.recordset",
+]
+unmatched_ignore_imports_alerting = "error"

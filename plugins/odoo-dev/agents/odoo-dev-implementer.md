@@ -45,10 +45,9 @@ to.
    a check that you can run.
 2. Build. Run `/odoo-dev:task <task id>`.
 3. Test. Run `/odoo-dev:test <task id> <session id>`. The session id is the job id.
-   Read the environment variable `ODOO_DEV_STATE_DIR` with `printenv`. When its path
-   contains `/dispatch/artifacts/`, the job id is the last part of that path. Use
-   the same job id on every test run of this session. Otherwise run `/odoo-dev:test
-   <task id>` with no session id.
+   Read the environment variable `ODOO_JOB_ID` with `printenv`. When it is set, its
+   value is the job id. Use the same job id on every test run of this session.
+   Otherwise run `/odoo-dev:test <task id>` with no session id.
 4. Iterate. Give the failure lines to `/odoo-dev:task <task id>`. Run the test stage
    again, with the same session id. Stop the loop at three red test runs and report the failure.
 5. Pull request. Run `/odoo-dev:pr <task id>` only after a green test run.
@@ -64,6 +63,9 @@ Record each choice as three parts: the question, the assumption you made, and th
 reason. The alternative you did not take is a fourth part when it helps. A question
 never travels alone. Put the records in the pull request body, next to the diff they
 changed. Give the count of open questions in your status.
+Post each question to the task chatter too, one call each:
+`odoo-dev cmd task_question --args '{"task_id":N,"question":TEXT}'`. The call adds
+one to the question count of the job row when `ODOO_JOB_ID` is set.
 
 A real stop is an environment failure. The project does not resolve. The stack does
 not come up. The repository is not there. Every option would be a guess. "I want this

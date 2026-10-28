@@ -9,9 +9,9 @@ import pytest
 from dispatcher import queue
 from dispatcher.collect import StreamParser
 from dispatcher.engine import job_usage_context
-from odoo_sdk.state.jobs import JobState
-from support import GOOD, FakeProc, stream
-from test_engine_cli import _submit, world  # noqa: F401  (the engine fixture)
+from odoo_dev_data.jobs import JobState
+from .support import GOOD, FakeProc, stream
+from .test_engine_cli import _submit, world  # noqa: F401  (the engine fixture)
 
 USAGE = {
     "input_tokens": 11,
@@ -22,10 +22,10 @@ USAGE = {
 
 
 @pytest.fixture
-def log_dir(tmp_path, monkeypatch):
-    target = tmp_path / "usage-log"
-    monkeypatch.setenv("USAGE_LOG_DIR", str(target))
-    return target
+def log_dir(home):
+    """The state root: the usage line lands in ``<home>/usage.db``."""
+    home.mkdir(parents=True, exist_ok=True)
+    return home
 
 
 def _lines(directory):
@@ -115,10 +115,10 @@ def test_a_failing_usage_log_does_not_fail_the_job(
     assert not engine.errors
 
 
-def test_no_log_dir_writes_nothing(world, tmp_path, monkeypatch):  # noqa: F811
-    monkeypatch.delenv("USAGE_LOG_DIR", raising=False)
+def test_the_off_switch_writes_nothing(world, home, monkeypatch):  # noqa: F811
+    monkeypatch.setenv("ODOO_DEV_USAGE_LOG", "0")
     engine, shell, _ = world
     shell.proc = FakeProc(stream(structured=GOOD))
     _submit(engine, ("qoc", "10"))
     engine.run()
-    assert not (tmp_path / "usage-log").exists()
+    assert not (home / "usage.db").exists()

@@ -1,0 +1,732 @@
+"""Tests for the ``mail.activity`` tool family (issues #677, #686, #890).
+
+The helpers are driven through a real :class:`OdooClient` wrapping a recording
+fake executor, so the exact domains, fields, and create values that would reach
+Odoo are asserted and the whole flow — type-name resolution, Markdown/HTML
+round-tripping, and the read-before-delete ordering of ``action_feedback`` — is
+exercised offline. Nothing here touches a live Odoo instance, and none of it has
+been verified against one.
+
+The write path additionally carries the #686 regression guard. ``res_model_id``
+used to be resolved with a ``search_read`` on ``ir.model``, which a
+least-privileged service account may never be granted, so scheduling failed
+outright; the id now comes from the hand-managed ``[model_ids]`` config map. The
+fake executor therefore has no ``ir.model`` branch at all — any such call is an
+unexpected call — and :func:`_assert_never_reads_ir_model` states the guarantee
+by name, following the shape ``test_search_knowledge_articles`` uses for the
+identical #444 guard on ``knowledge.article``.
+
+#890 adds the missing half of that story: the map is still the only thing the
+write path reads, but the entry no longer has to be typed in by hand.
+``TestGetModelsFillsTheSchedulingEntryIn`` walks the whole way from the shipped
+config — connection settings, no ``[model_ids]`` section — to a successful
+``schedule_activity``, with one ``get_models`` call in between and no editor.
+"""
+
+import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from typing import Any
+from unittest.mock import MagicMock, patch
+
+from odoo_client.client import OdooClient
+from odoo_dev_core import default_registry
+from odoo_dev_data.config import LocalConfig
+from odoo_client.transport.executor import OdooExecutor
+from odoo_dev_core.services.activities import (
+    DEFAULT_ACTIVITY_RES_MODEL,
+    get_activities,
+    mark_activity_done,
+    resolve_activity_type_id,
+    schedule_activity,
+    search_activity_types,
+)
+from ...fakes import service
+
+_ACTIVITY_FIELDS = [
+    "id",
+    "res_model",
+    "res_id",
+    "res_name",
+    "activity_type_id",
+    "summary",
+    "note",
+    "date_deadline",
+    "user_id",
+    "create_date",
+    "state",
+]
+
+_TYPE_FIELDS = ["id", "name", "res_model"]
+
+
+def _activity(
+    activity_id: int = 1,
+    *,
+    type_pair: Any = (4, "To Do"),
+    note: str = "<p>Chase the client</p>",
+    **overrides: Any,
+) -> dict:
+    """Build a raw ``mail.activity`` row as Odoo would return it."""
+    row = {
+        "id": activity_id,
+        "res_model": "project.task",
+        "res_id": 42,
+        "res_name": "Fix VAT",
+        # Odoo serializes an unset many2one as ``False``, a set one as [id, name].
+        "activity_type_id": list(type_pair) if type_pair else type_pair,
+        "summary": "Follow up",
+        "note": note,
+        "date_deadline": "2026-09-10",
+        "user_id": [7, "Chris P"],
+        "create_date": "2026-09-02 09:00:00",
+        "state": "planned",
+    }
+    row.update(overrides)
+    return row
+
+
+class _RecordingExecutor(OdooExecutor):
+    """Fake executor recording every call and dispatching canned data by model.
+
+    Real ``OdooClient`` execution runs through this (including the system-wide
+    ``forbid_unlink`` guard), and every issued call is captured in ``calls`` so
+    the exact domains / fields / create values can be asserted.
+
+    There is deliberately **no** ``ir.model`` branch (#686): a least-privileged
+    service account cannot read that table, so any attempt to falls through to
+    the ``unexpected call`` assertion below and fails the test outright.
+    """
+
+    def __init__(
+        self,
+        *,
+        type_rows: list[list[dict]] | None = None,
+        activities: list[dict] | None = None,
+        created_id: int = 1,
+        feedback_result: Any = 900,
+    ) -> None:
+        # One canned response per ``mail.activity.type`` search, consumed in
+        # order so the resolver's exact-then-substring two-pass is observable.
+        self._type_rows = list(type_rows) if type_rows is not None else []
+        self._activities = activities if activities is not None else [_activity()]
+        self._created_id = created_id
+        self._feedback_result = feedback_result
+        self.calls: list[tuple[str, str, tuple[Any, ...], dict[str, Any]]] = []
+
+    def _next_type_rows(self) -> list[dict]:
+        return self._type_rows.pop(0) if self._type_rows else []
+
+    def execute(self, model: str, method: str, *args: Any, **kwargs: Any) -> Any:
+        self.calls.append((model, method, args, kwargs))
+        if model == "mail.activity.type":
+            return self._next_type_rows()
+        if (model, method) == ("mail.activity", "create"):
+            return self._created_id
+        if (model, method) in {
+            ("mail.activity", "read"),
+            ("mail.activity", "search_read"),
+        }:
+            return self._activities
+        if (model, method) == ("mail.activity", "action_feedback"):
+            return self._feedback_result
+        raise AssertionError(f"unexpected call: {model}.{method}")
+
+
+def _client(uid: int = 7, **kwargs: Any) -> tuple[OdooClient, _RecordingExecutor]:
+    executor = _RecordingExecutor(**kwargs)
+    client = OdooClient(executor=executor)
+    # ``schedule_activity``/``get_activities`` default to the authenticated user,
+    # so the fake executor must answer the uid probe the client delegates to it.
+    executor.uid = uid  # type: ignore[attr-defined]
+    return client, executor
+
+
+def _calls_to(executor: _RecordingExecutor, model: str, method: str) -> list[tuple]:
+    return [call for call in executor.calls if call[:2] == (model, method)]
+
+
+#: The ``[model_ids]`` map the scheduling tests run against, standing in for the
+#: entries an operator adds by hand once (#686).
+_MODEL_IDS = {"project.task": 71, "crm.lead": 84}
+
+
+def _config(model_ids: dict[str, int] | None = None) -> LocalConfig:
+    """Build a :class:`LocalConfig` carrying a known ``[model_ids]`` map.
+
+    Constructed directly rather than loaded, so no test can pick up (or depend
+    on) a real ``~/.config/odoo_client`` file on the machine running it.
+    """
+    return LocalConfig(model_ids=_MODEL_IDS if model_ids is None else model_ids)
+
+
+def _assert_never_reads_ir_model(executor: _RecordingExecutor) -> None:
+    """Fail if any recorded call touched the administrative ``ir.model`` table.
+
+    The #686 regression guard, mirroring ``_assert_never_probes_ir_model`` in
+    ``test_search_knowledge_articles`` (#444). ``res_model_id`` is resolved from
+    config precisely so a least-privileged account, which may never be granted
+    ``ir.model``, can still schedule an activity.
+    """
+    models = [model for model, _, _, _ in executor.calls]
+    assert "ir.model" not in models, f"ir.model must never be read: {executor.calls}"
+
+
+class TestResolveActivityTypeId(unittest.TestCase):
+    """A type is addressable by raw id or by name (issue #677's resolver)."""
+
+    def test_int_passes_straight_through_without_any_query(self):
+        client, executor = _client()
+        self.assertEqual(resolve_activity_type_id(client, 4), 4)
+        # An id needs no lookup at all — zero RPC calls were issued.
+        self.assertEqual(executor.calls, [])
+
+    def test_exact_name_match_wins_on_the_first_pass(self):
+        client, executor = _client(type_rows=[[{"id": 4, "name": "Call"}]])
+        self.assertEqual(resolve_activity_type_id(client, "call"), 4)
+        searches = _calls_to(executor, "mail.activity.type", "search_read")
+        # A single =ilike pass; the substring fallback never ran.
+        self.assertEqual(len(searches), 1)
+        self.assertEqual(searches[0][2][0], [("name", "=ilike", "call")])
+        self.assertEqual(searches[0][3]["fields"], _TYPE_FIELDS)
+
+    def test_substring_fallback_runs_only_when_exact_finds_nothing(self):
+        client, executor = _client(type_rows=[[], [{"id": 9, "name": "Call back"}]])
+        self.assertEqual(resolve_activity_type_id(client, "back"), 9)
+        searches = _calls_to(executor, "mail.activity.type", "search_read")
+        self.assertEqual(len(searches), 2)
+        self.assertEqual(searches[1][2][0], [("name", "ilike", "back")])
+
+    def test_res_model_narrows_to_generic_plus_scoped_types(self):
+        client, executor = _client(type_rows=[[{"id": 4, "name": "Call"}]])
+        resolve_activity_type_id(client, "Call", res_model="project.task")
+        domain = _calls_to(executor, "mail.activity.type", "search_read")[0][2][0]
+        self.assertEqual(
+            domain,
+            [
+                ("name", "=ilike", "Call"),
+                "|",
+                ("res_model", "=", False),
+                ("res_model", "=", "project.task"),
+            ],
+        )
+
+    def test_unknown_name_error_lists_the_available_types(self):
+        # exact -> none, substring -> none, then the "what is available" listing.
+        client, _ = _client(
+            type_rows=[[], [], [{"id": 4, "name": "To Do"}, {"id": 5, "name": "Call"}]]
+        )
+        with self.assertRaises(ValueError) as ctx:
+            resolve_activity_type_id(client, "Todo")
+        message = str(ctx.exception)
+        self.assertIn("Todo", message)
+        self.assertIn("To Do", message)
+        self.assertIn("Call", message)
+
+    def test_unknown_name_with_no_types_at_all_omits_the_listing(self):
+        client, _ = _client(type_rows=[[], [], []])
+        with self.assertRaises(ValueError) as ctx:
+            resolve_activity_type_id(client, "Todo")
+        self.assertEqual(str(ctx.exception), "No activity type matches 'Todo'.")
+
+    def test_ambiguous_name_names_every_candidate(self):
+        client, _ = _client(
+            type_rows=[[], [{"id": 4, "name": "Call"}, {"id": 9, "name": "Call back"}]]
+        )
+        with self.assertRaises(ValueError) as ctx:
+            resolve_activity_type_id(client, "Call")
+        message = str(ctx.exception)
+        self.assertIn("ambiguous", message)
+        self.assertIn("id=4", message)
+        self.assertIn("id=9", message)
+
+    def test_blank_name_is_rejected_before_any_query(self):
+        client, executor = _client()
+        with self.assertRaises(ValueError) as ctx:
+            resolve_activity_type_id(client, "   ")
+        self.assertIn("non-empty name", str(ctx.exception))
+        self.assertEqual(executor.calls, [])
+
+    def test_bool_is_not_treated_as_an_id(self):
+        # ``bool`` subclasses ``int``; letting True through would schedule
+        # against activity type 1 rather than reporting the bad input.
+        client, _ = _client(type_rows=[[], [], []])
+        with self.assertRaises(ValueError):
+            resolve_activity_type_id(client, True)
+
+
+class TestSearchActivityTypes(unittest.TestCase):
+    """The discovery counterpart is read-only and normalises ``res_model``."""
+
+    def test_returns_id_name_and_normalised_res_model(self):
+        client, _ = _client(
+            type_rows=[
+                [
+                    {"id": 4, "name": "To Do", "res_model": False},
+                    {"id": 9, "name": "Upsell", "res_model": "crm.lead"},
+                ]
+            ]
+        )
+        self.assertEqual(
+            search_activity_types(client),
+            [
+                {"id": 4, "name": "To Do", "res_model": None},
+                {"id": 9, "name": "Upsell", "res_model": "crm.lead"},
+            ],
+        )
+
+    def test_query_becomes_an_ilike_name_predicate(self):
+        client, executor = _client(type_rows=[[]])
+        search_activity_types(client, query="meet")
+        domain = _calls_to(executor, "mail.activity.type", "search_read")[0][2][0]
+        self.assertEqual(domain, [("name", "ilike", "meet")])
+
+    def test_no_query_searches_every_type(self):
+        client, executor = _client(type_rows=[[]])
+        search_activity_types(client)
+        _, _, args, kwargs = _calls_to(executor, "mail.activity.type", "search_read")[0]
+        self.assertEqual(args[0], [])
+        self.assertEqual(kwargs["order"], "name asc, id asc")
+        self.assertEqual(kwargs["limit"], 20)
+
+
+class TestScheduleActivity(unittest.TestCase):
+    """Creating an activity resolves the model id, the type, and the assignee."""
+
+    def _client(self, **kwargs: Any):
+        kwargs.setdefault("type_rows", [[{"id": 4, "name": "To Do"}]])
+        return _client(**kwargs)
+
+    def _create_values(self, executor: _RecordingExecutor) -> dict:
+        return _calls_to(executor, "mail.activity", "create")[0][2][0]
+
+    def test_defaults_to_project_task_and_the_current_uid(self):
+        client, executor = self._client()
+        schedule_activity(client, 42, config=_config())
+        values = self._create_values(executor)
+        # 71 is the ``project.task`` entry in the config map, not a lookup.
+        self.assertEqual(values["res_model_id"], 71)
+        self.assertEqual(values["res_id"], 42)
+        self.assertEqual(values["user_id"], 7)
+        self.assertEqual(DEFAULT_ACTIVITY_RES_MODEL, "project.task")
+
+    def test_res_model_id_comes_from_config_without_reading_ir_model(self):
+        # The #686 regression guard: the whole write path completes and the id
+        # is the configured one, with ir.model never appearing in the calls.
+        client, executor = self._client()
+        schedule_activity(client, 42, res_model="crm.lead", config=_config())
+        _assert_never_reads_ir_model(executor)
+        self.assertEqual(self._create_values(executor)["res_model_id"], 84)
+
+    def test_res_model_id_is_sent_and_res_model_is_not(self):
+        # ``mail.activity.res_model`` is a read-only related mirror of
+        # ``res_model_id``; writing it would be rejected or ignored.
+        client, executor = self._client()
+        schedule_activity(client, 42, res_model="crm.lead", config=_config())
+        values = self._create_values(executor)
+        self.assertIn("res_model_id", values)
+        self.assertNotIn("res_model", values)
+
+    def test_activity_type_name_is_resolved_to_an_id(self):
+        client, executor = self._client()
+        schedule_activity(client, 42, activity_type="to do", config=_config())
+        self.assertEqual(self._create_values(executor)["activity_type_id"], 4)
+
+    def test_optional_values_are_omitted_so_odoo_defaults_apply(self):
+        client, executor = self._client(type_rows=[])
+        schedule_activity(client, 42, config=_config())
+        values = self._create_values(executor)
+        for key in ("activity_type_id", "summary", "note", "date_deadline"):
+            self.assertNotIn(key, values)
+
+    def test_summary_is_forwarded_verbatim(self):
+        client, executor = self._client(type_rows=[])
+        schedule_activity(client, 42, summary="Chase the client", config=_config())
+        self.assertEqual(self._create_values(executor)["summary"], "Chase the client")
+
+    def test_note_is_rendered_from_markdown_to_html(self):
+        client, executor = self._client(type_rows=[])
+        schedule_activity(client, 42, note="**chase** the client", config=_config())
+        note = self._create_values(executor)["note"]
+        self.assertIn("<strong>chase</strong>", note)
+
+    def test_explicit_assignee_and_deadline_are_forwarded(self):
+        client, executor = self._client(type_rows=[])
+        schedule_activity(
+            client, 42, date_deadline="2026-09-10", user_id=12, config=_config()
+        )
+        values = self._create_values(executor)
+        self.assertEqual(values["date_deadline"], "2026-09-10")
+        self.assertEqual(values["user_id"], 12)
+
+    def test_malformed_deadline_is_rejected_before_any_call(self):
+        client, executor = self._client()
+        with self.assertRaises(ValueError) as ctx:
+            schedule_activity(client, 42, date_deadline="10/09/2026", config=_config())
+        self.assertIn("date_deadline", str(ctx.exception))
+        self.assertEqual(executor.calls, [])
+
+    def test_created_activity_is_read_back_and_shaped(self):
+        client, executor = self._client(created_id=1)
+        result = schedule_activity(client, 42, activity_type="To Do", config=_config())
+        self.assertEqual(result["activity_id"], 1)
+        self.assertEqual(result["activity_type_id"], 4)
+        self.assertEqual(result["activity_type"], "To Do")
+        self.assertEqual(result["user_id"], 7)
+        self.assertEqual(result["user"], "Chris P")
+        # The HTML note comes back as Markdown, mirroring the write path.
+        self.assertEqual(result["note"], "Chase the client")
+        self.assertEqual(result["state"], "planned")
+        # The full round trip — type resolution, create, read back — and still
+        # not one ir.model call anywhere in it (#686).
+        _assert_never_reads_ir_model(executor)
+
+    def test_unmapped_model_names_the_model_and_the_config_entry(self):
+        # The map is hand-managed, so this message is the only discovery
+        # mechanism a caller without server access gets. It must be actionable.
+        client, executor = self._client()
+        with self.assertRaises(ValueError) as ctx:
+            schedule_activity(client, 42, res_model="not.a.model", config=_config())
+        message = str(ctx.exception)
+        self.assertIn("not.a.model", message)
+        self.assertIn("[model_ids]", message)
+        self.assertIn("ODOO_MODEL_IDS", message)
+        # And it must never send the caller back to the privilege escalation
+        # #444 and #686 exist to forbid — the advice the old message gave.
+        self.assertNotIn("grant read access on ir.model", message)
+        self.assertNotIn("Ask an Odoo admin", message)
+
+    def test_unmapped_model_fails_closed_before_any_rpc_call(self):
+        # No calls at all subsumes the ir.model guard here: an unmapped model
+        # stops the write path before it reaches the type search or the create.
+        client, executor = self._client()
+        with self.assertRaises(ValueError):
+            schedule_activity(client, 42, res_model="not.a.model", config=_config())
+        _assert_never_reads_ir_model(executor)
+        self.assertEqual(executor.calls, [])
+
+    def test_config_is_required_and_cannot_be_defaulted_away(self):
+        # A default would have to fall back to reading ir.model, which is the
+        # defect itself; the signature makes that impossible to reintroduce.
+        client, _ = self._client()
+        with self.assertRaises(TypeError):
+            schedule_activity(client, 42)  # type: ignore[call-arg]
+
+    def test_no_create_is_issued_when_the_type_cannot_be_resolved(self):
+        client, executor = _client(type_rows=[[], [], []])
+        with self.assertRaises(ValueError):
+            schedule_activity(client, 42, activity_type="Nope", config=_config())
+        self.assertEqual(_calls_to(executor, "mail.activity", "create"), [])
+
+
+class _IrModelExecutor(OdooExecutor):
+    """The opposite fake: answers ``ir.model`` and refuses everything else.
+
+    ``get_models`` is the one gated command that may read that table, so it gets
+    its own executor rather than an ``ir.model`` branch on
+    :class:`_RecordingExecutor` — whose whole point is that such a branch does
+    not exist (#686).
+    """
+
+    def __init__(self, rows: list[dict]) -> None:
+        self._rows = rows
+        self.calls: list[tuple[str, str, tuple[Any, ...], dict[str, Any]]] = []
+
+    def execute(self, model: str, method: str, *args: Any, **kwargs: Any) -> Any:
+        self.calls.append((model, method, args, kwargs))
+        if model != "ir.model":
+            raise AssertionError(f"unexpected call: {model}.{method}")
+        if method in {"search", "search_read"}:
+            return (
+                [row["id"] for row in self._rows]
+                if method == "search"
+                else list(self._rows)
+            )
+        if method == "read":
+            return list(self._rows)
+        raise AssertionError(f"unexpected call: {model}.{method}")
+
+
+class TestGetModelsFillsTheSchedulingEntryIn(unittest.TestCase):
+    """The #890 end-to-end: a command fills the map in, not a hand edit.
+
+    #444 and #686 are untouched by this — ``schedule_activity`` still reads the
+    ``[model_ids]`` map and nothing resolves ``ir.model`` at call time. What
+    changes is only how the entry gets there: ``get_models``, which already
+    reads that table under its own gate, writes the id it resolved.
+    """
+
+    def test_schedule_succeeds_after_get_models_persisted_the_id(self):
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp) / "config.toml"
+            # The shipped state: a config with connection settings and no
+            # [model_ids] section at all.
+            path.write_text('[connection]\nurl = "https://x"\n', encoding="utf-8")
+            with patch.dict("os.environ", {}, clear=True):
+                config = LocalConfig.load(path)
+
+                client, before = _client(type_rows=[[{"id": 4, "name": "To Do"}]])
+                with self.assertRaises(ValueError):
+                    schedule_activity(client, 42, config=config)
+                # It fails closed: nothing was sent to Odoo at all.
+                self.assertEqual(before.calls, [])
+
+                ir_model = _IrModelExecutor(
+                    [
+                        {"id": 71, "model": "project.task", "name": "Task"},
+                        {"id": 84, "model": "crm.lead", "name": "Lead"},
+                    ]
+                )
+                result = service(
+                    client=OdooClient(executor=ir_model), config=config
+                ).execute("get_models", persist=["project.task"])
+                self.assertEqual(result["persisted"], {"project.task": 71})
+                self.assertNotIn("warning", result)
+
+                # The same call, unchanged, with no hand-edited config between.
+                client, after = _client(type_rows=[[{"id": 4, "name": "To Do"}]])
+                after.uid = 7  # type: ignore[attr-defined]
+                schedule_activity(client, 42, activity_type="To Do", config=config)
+
+            self.assertEqual(
+                _calls_to(after, "mail.activity", "create")[0][2][0]["res_model_id"], 71
+            )
+            # And the scheduling path itself still never touches ir.model.
+            _assert_never_reads_ir_model(after)
+
+            # The entry outlives the process: it was written to the file.
+            with patch.dict("os.environ", {}, clear=True):
+                reloaded = LocalConfig.load(path)
+            self.assertEqual(reloaded.model_id("project.task"), 71)
+            self.assertEqual(reloaded.connection["url"], "https://x")
+
+
+class TestGetActivities(unittest.TestCase):
+    """The read counterpart filters by record and/or user, deadline-first."""
+
+    def _domain(self, executor: _RecordingExecutor):
+        return _calls_to(executor, "mail.activity", "search_read")[0][2][0]
+
+    def test_res_id_without_model_defaults_to_project_task(self):
+        client, executor = _client()
+        get_activities(client, res_id=42)
+        self.assertEqual(
+            self._domain(executor),
+            [("res_model", "=", "project.task"), ("res_id", "=", 42)],
+        )
+
+    def test_explicit_model_is_honoured(self):
+        client, executor = _client()
+        get_activities(client, res_id=8, res_model="crm.lead")
+        self.assertEqual(
+            self._domain(executor),
+            [("res_model", "=", "crm.lead"), ("res_id", "=", 8)],
+        )
+
+    def test_unfiltered_call_scopes_to_the_authenticated_user(self):
+        # An unfiltered read would return every open activity in the database.
+        client, executor = _client()
+        get_activities(client)
+        self.assertEqual(self._domain(executor), [("user_id", "=", 7)])
+
+    def test_explicit_user_id_is_not_overridden(self):
+        client, executor = _client()
+        get_activities(client, user_id=12)
+        self.assertEqual(self._domain(executor), [("user_id", "=", 12)])
+
+    def test_record_filter_does_not_add_a_user_filter(self):
+        # Asking for a record's activities must show everyone's, not just mine.
+        client, executor = _client()
+        get_activities(client, res_id=42)
+        self.assertNotIn(("user_id", "=", 7), self._domain(executor))
+
+    def test_fields_order_and_limit(self):
+        client, executor = _client()
+        get_activities(client, res_id=42, limit=5)
+        _, _, _, kwargs = _calls_to(executor, "mail.activity", "search_read")[0]
+        self.assertEqual(kwargs["fields"], _ACTIVITY_FIELDS)
+        self.assertEqual(kwargs["order"], "date_deadline asc, id asc")
+        self.assertEqual(kwargs["limit"], 5)
+
+    def test_rows_are_shaped_with_ids_and_display_names(self):
+        client, _ = _client()
+        entry = get_activities(client, res_id=42)[0]
+        self.assertEqual(entry["activity_id"], 1)
+        self.assertEqual(entry["res_model"], "project.task")
+        self.assertEqual(entry["res_id"], 42)
+        self.assertEqual(entry["res_name"], "Fix VAT")
+        self.assertEqual(entry["activity_type_id"], 4)
+        self.assertEqual(entry["activity_type"], "To Do")
+        self.assertEqual(entry["user_id"], 7)
+        self.assertEqual(entry["user"], "Chris P")
+        self.assertEqual(entry["note"], "Chase the client")
+        self.assertEqual(entry["date_deadline"], "2026-09-10")
+
+    def test_empty_many2ones_and_note_degrade_cleanly(self):
+        client, _ = _client(
+            activities=[
+                _activity(type_pair=False, note="", user_id=False, summary=False)
+            ]
+        )
+        entry = get_activities(client, res_id=42)[0]
+        self.assertIsNone(entry["activity_type_id"])
+        self.assertEqual(entry["activity_type"], "")
+        self.assertIsNone(entry["user_id"])
+        self.assertEqual(entry["user"], "")
+        self.assertEqual(entry["summary"], "")
+        self.assertEqual(entry["note"], "")
+
+    def test_read_is_side_effect_free(self):
+        client, executor = _client()
+        get_activities(client, res_id=42)
+        methods = {method for _, method, _, _ in executor.calls}
+        self.assertTrue(methods <= {"search_read", "read"})
+
+
+class TestMarkActivityDone(unittest.TestCase):
+    """Completion reads first, then hands the feedback to ``action_feedback``."""
+
+    def test_reads_the_activity_before_completing_it(self):
+        # action_feedback DELETES the row, so the read must come first or the
+        # returned description would be unrecoverable.
+        client, executor = _client()
+        mark_activity_done(client, 1, "done and dusted")
+        sequence = [call[:2] for call in executor.calls]
+        self.assertEqual(
+            sequence,
+            [("mail.activity", "read"), ("mail.activity", "action_feedback")],
+        )
+
+    def test_feedback_is_forwarded_as_a_keyword(self):
+        client, executor = _client()
+        mark_activity_done(client, 1, "spoke to client")
+        _, _, args, kwargs = _calls_to(executor, "mail.activity", "action_feedback")[0]
+        self.assertEqual(args[0], [1])
+        self.assertEqual(kwargs, {"feedback": "spoke to client"})
+
+    def test_result_describes_what_was_closed(self):
+        client, _ = _client()
+        result = mark_activity_done(client, 1, "spoke to client")
+        self.assertTrue(result["done"])
+        self.assertEqual(result["feedback"], "spoke to client")
+        self.assertEqual(result["message_id"], 900)
+        self.assertEqual(result["activity_id"], 1)
+        self.assertEqual(result["activity_type"], "To Do")
+        self.assertEqual(result["res_id"], 42)
+
+    def test_falsy_feedback_result_becomes_a_null_message_id(self):
+        client, _ = _client(feedback_result=False)
+        self.assertIsNone(mark_activity_done(client, 1)["message_id"])
+
+    def test_missing_activity_raises_before_any_feedback_call(self):
+        client, executor = _client(activities=[])
+        with self.assertRaises(ValueError) as ctx:
+            mark_activity_done(client, 99)
+        self.assertIn("mail.activity 99 not found", str(ctx.exception))
+        # The message names the "already done" case, which is the likely cause.
+        self.assertIn("marked done", str(ctx.exception))
+        self.assertEqual(_calls_to(executor, "mail.activity", "action_feedback"), [])
+
+
+class TestActivityCommands(unittest.TestCase):
+    """Each built-in command registers and delegates to its helper."""
+
+    def test_all_four_commands_are_registered(self):
+        for name in (
+            "schedule_activity",
+            "get_activities",
+            "mark_activity_done",
+            "search_activity_types",
+        ):
+            self.assertIn(name, default_registry().ids())
+
+    def test_every_description_is_non_empty(self):
+        for name in (
+            "schedule_activity",
+            "get_activities",
+            "mark_activity_done",
+            "search_activity_types",
+        ):
+            self.assertTrue(default_registry().get(name).description.strip())
+
+    def test_schedule_delegates_every_argument(self):
+        client = MagicMock()
+        config = _config()
+        target = "odoo_dev_core.builtins.schedule_activity.schedule_activity"
+        with patch(target, return_value={"activity_id": 1}) as helper:
+            result = service(client=client, config=config).execute(
+                "schedule_activity",
+                res_id=42,
+                res_model="crm.lead",
+                activity_type="Call",
+                summary="s",
+                note="n",
+                date_deadline="2026-09-10",
+                user_id=12,
+            )
+        self.assertEqual(result, {"activity_id": 1})
+        helper.assert_called_once_with(
+            client,
+            42,
+            res_model="crm.lead",
+            activity_type="Call",
+            summary="s",
+            note="n",
+            date_deadline="2026-09-10",
+            user_id=12,
+            config=config,
+        )
+
+    def test_schedule_passes_the_injected_config_not_a_freshly_loaded_one(self):
+        # ``services.config`` is the injected peer dependency (#686); building a
+        # second ``LocalConfig`` here would read whatever file happens to be on
+        # the machine instead of the one the host resolved.
+        client = MagicMock()
+        config = _config()
+        command = service(client=client, config=config)
+        target = "odoo_dev_core.builtins.schedule_activity.schedule_activity"
+        with patch(target, return_value={}) as helper:
+            command.execute("schedule_activity", res_id=42)
+        self.assertIs(helper.call_args.kwargs["config"], config)
+
+    def test_schedule_description_documents_model_ids_not_ir_model_access(self):
+        # The description is LLM-facing: it has to point at the [model_ids]
+        # entry, never at asking an admin for ir.model access (#686).
+        description = default_registry().get("schedule_activity").description
+        self.assertIn("[model_ids]", description)
+        self.assertNotIn("requires read access on ir.model", description)
+
+    def test_get_activities_delegates_every_argument(self):
+        client = MagicMock()
+        target = "odoo_dev_core.builtins.get_activities.get_activities"
+        with patch(target, return_value=[]) as helper:
+            service(client=client).execute(
+                "get_activities", res_id=42, res_model="crm.lead", user_id=12, limit=5
+            )
+        helper.assert_called_once_with(
+            client, res_id=42, res_model="crm.lead", user_id=12, limit=5
+        )
+
+    def test_mark_done_delegates_every_argument(self):
+        client = MagicMock()
+        target = "odoo_dev_core.builtins.mark_activity_done.mark_activity_done"
+        with patch(target, return_value={"done": True}) as helper:
+            service(client=client).execute(
+                "mark_activity_done", activity_id=1, feedback="fb"
+            )
+        helper.assert_called_once_with(client, 1, "fb")
+
+    def test_search_types_delegates_every_argument(self):
+        client = MagicMock()
+        target = "odoo_dev_core.builtins.search_activity_types.search_activity_types"
+        with patch(target, return_value=[]) as helper:
+            service(client=client).execute(
+                "search_activity_types", query="call", res_model="project.task", limit=5
+            )
+        helper.assert_called_once_with(
+            client, query="call", res_model="project.task", limit=5
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()

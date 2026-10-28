@@ -12,7 +12,7 @@ and never routed around.
 Inputs and paths:
 
 - The worktree and the branch. `owner/repo` comes from the resolved
-  project. `default_branch` comes from `build` in the task artifact (an upgrade run
+  project. `base_branch` comes from `build` in the task artifact (an upgrade run
   sets it to the upgrade branch). Neither comes from the GitHub default.
 - Scripts: `<base directory>/scripts/pr-open.sh`. `module-classify.sh`, `writeback.sh`
   and `_gh-url.sh` live at `<plugin root>/scripts`, where `<plugin root>` is two
@@ -38,8 +38,12 @@ that ships no tests → report it and carry on.
 Commits are conventional, scope = module name, per `odoo-devcontainer/references/commits.md`.
 Tidy the history before the PR exists.
 
-The manifest version is bumped once per PR for every changed module. On odoo.sh a module
-is only updated when the commit bumps `__manifest__.py`.
+The manifest version is bumped once per PR for every changed module. `pr-open.sh` does it
+before the push, in one `chore(<modules>): bump manifest versions` commit, for each module
+whose version has not moved since the merge-base. Commits on the branch need no bump. On
+odoo.sh a module is only updated when the PR bumps `__manifest__.py`. `--no-bump` skips it.
+A module deleted without a `dropped` entry in the upgrade state adds a `> Warning:` line to
+the PR body.
 
 Size: best under 500 changed lines, acceptable under 1000. Past that, split into stacked
 pull requests.
@@ -107,7 +111,7 @@ your own words. No test output, no logs, no tracebacks, no machine paths, no rev
 
 → `{"pr_url","pr_number","action":"created"|"updated","draft","base","head","assigned"}`
 
-- `<base>` is `default_branch` from `build` in the task artifact, never from GitHub.
+- `<base>` is `base_branch` from `build` in the task artifact, never from GitHub.
 - Always `--draft` and `--assign-me`. The script never runs `gh pr ready`.
 - Re-run safe: an open PR on this head is edited, never duplicated.
 - `exit 5` — body file missing or empty → fix the body and run again.
@@ -121,7 +125,7 @@ Then stop. Nothing polls the PR after it opens.
 <plugin root>/scripts/writeback.sh activity <task_id> --summary "Review requested: <pr_url>"
 ```
 
-- Both wrap `odoo-sdk cmd task_note` and the activity commands. The note needs no prior
+- Both wrap `odoo-dev cmd task_note` and the activity commands. The note needs no prior
   session start.
 - Schedule the activity only when `pr-open.sh` said `"action": "created"`. Close a stale
   request with `writeback.sh done <task_id> --match "<old pr_url>"`.

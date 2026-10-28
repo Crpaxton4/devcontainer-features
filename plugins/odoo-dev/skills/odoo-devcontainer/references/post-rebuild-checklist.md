@@ -29,8 +29,10 @@ can of course set one, and should use their own plugin root.
 <plugin root>/scripts/setup.sh           # take the safe unattended steps
 ```
 
-Start here. `setup.sh` calls `bootstrap-state.sh` for you, so the state dir is
-seeded if it is absent, and it finishes by running `preflight.sh` and printing its
+Start here. `setup.sh` never creates the state dir, which is
+`${ODOO_DEV_HOME:-$HOME/.config/odoo-dev}`. When it is absent, `setup.sh` lists
+`odoo-dev doctor --migrate`, the one migration path, as a command for you to run
+once on the host. It finishes by running `preflight.sh` and printing its
 JSON — setup and readiness in one pass. It verifies the tools every delivery skill
 assumes (`node`, `git`, `gh` and its token scopes, the CodeRabbit CLI and its
 login, `python3`, the headless browser; docker and the devcontainer CLI on the
@@ -42,10 +44,9 @@ green, and the gate blocks on `tours_skipped`.
 Want `ok: true` with empty `missing` and `manual_steps` arrays, or work the list
 it prints before going further.
 
-The two steps it wraps still stand alone, when only one of them is wanted:
+The readiness step stands alone, when only it is wanted:
 
 ```bash
-<plugin root>/scripts/bootstrap-state.sh   # idempotent; seeds the state dir if absent
 <plugin root>/skills/odoo-task-env/scripts/preflight.sh
 ```
 
@@ -56,9 +57,8 @@ names before going further. On the host it also reports the resolved `repos_dir`
 ## 1. odoo-mcp
 
 - `claude mcp list` shows `odoo-mcp` connected.
-- `ODOO_SDK_CONFIG` (directory containing `config.ini`) and
-  `ODOO_TASK_TRACKER_DIR` (holding `tracker.db`) are both set. The older
-  `~/.odoo_sdk.ini` and `~/.config/odoo-task-tracker` paths are not used.
+- `ODOO_DEV_HOME` is set and `odoo-dev doctor` reports `config.toml` and
+  `state.db` under it.
 - One live round trip: `get_task` on a known task id returns identity fields.
 
 MCP is not callable from bash, which is why `preflight.sh` does not check it.
@@ -129,7 +129,7 @@ needs a postgres it can create a database on; it skips cleanly without one.
 ## 6. Manual one-repo cycle
 
 Proves the parts that only fail on real hardware. Inside a devcontainer, add
-`--repo-path /mnt/extra-addons` to the first two commands.
+`--repo-root /mnt/extra-addons` to the first two commands.
 
 1. **Resolve the project.** Unknown project must stop, not guess:
    ```bash
@@ -137,8 +137,8 @@ Proves the parts that only fail on real hardware. Inside a devcontainer, add
    ```
 2. **Worktree, twice.**
    ```bash
-   <plugin root>/skills/odoo-task-env/scripts/worktree-ensure.sh <repo> 999 smoke-test <default_branch>
-   <plugin root>/skills/odoo-task-env/scripts/worktree-ensure.sh <repo> 999 smoke-test <default_branch>
+   <plugin root>/skills/odoo-task-env/scripts/worktree-ensure.sh <repo> 999 smoke-test <base_branch>
+   <plugin root>/skills/odoo-task-env/scripts/worktree-ensure.sh <repo> 999 smoke-test <base_branch>
    ```
    First returns `"status": "created"`, second `"reused"`. Confirm
    `.worktrees/` landed in `.git/info/exclude`, and (on the host) that the
@@ -167,21 +167,21 @@ Proves the parts that only fail on real hardware. Inside a devcontainer, add
    `tours_run == 0` must come back `passed: false`.
 5. **Prior-work discovery** (read-only, safe on a real repo):
    ```bash
-   <plugin root>/skills/odoo-task-env/scripts/existing-work.sh <repo> <a task id with a known branch> <default_branch>
+   <plugin root>/skills/odoo-task-env/scripts/existing-work.sh <repo> <a task id with a known branch> <base_branch>
    ```
    Expect `state: resume` with a branch, or `complete` for merged work. It probes
    **both** `<id>#<slug>` (human) and `<id>-<slug>` (automation) forms. A
    `gh_error` is reported, never fatal.
 6. **Adopting an existing branch.**
    ```bash
-   <plugin root>/skills/odoo-task-env/scripts/worktree-ensure.sh <repo> <id> <slug> <default_branch> '<id>#<slug>'
+   <plugin root>/skills/odoo-task-env/scripts/worktree-ensure.sh <repo> <id> <slug> <base_branch> '<id>#<slug>'
    ```
    Expect `"status": "created"` on a worktree carrying that exact ref with its
    commits intact (`git -C <worktree> log --oneline <base>..HEAD`) and nothing
    reset.
 7. **Release manifest, read-only.**
    ```bash
-   <plugin root>/skills/odoo-release/scripts/release-manifest.sh <owner/repo> <repo_path> <from> <to>
+   <plugin root>/skills/odoo-release/scripts/release-manifest.sh <owner/repo> <repo_root> <from> <to>
    ```
    Opens and merges nothing. Check the `table_md`, and that PRs without a
    `[task NNN]` title land in `unresolved` rather than being guessed at.

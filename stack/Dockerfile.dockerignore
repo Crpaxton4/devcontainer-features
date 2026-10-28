@@ -1,5 +1,6 @@
 *
 !libraries
+!apps/webui
 **/.venv
 **/__pycache__
 **/*.pyc

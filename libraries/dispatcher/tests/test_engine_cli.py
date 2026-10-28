@@ -5,19 +5,20 @@ import json
 import os
 import signal
 import threading
+from pathlib import Path
 
 import pytest
-from odoo_sdk.state.dispatch_state import bundle_dir, now_us, odoo_dev_dir
-from odoo_sdk.state.jobs import DeadReason, JobState, JobStore
-from odoo_sdk.state.runs_store import RunStore
+from odoo_dev_data.db import now_us
+from odoo_dev_data.home import CONTAINER_HOME, job_bundle_dir
+from odoo_dev_data.jobs import DeadReason, JobState, JobStore
+from odoo_dev_data.locks import exclusive
 
 from dispatcher import cli, lifecycle, queue
 from dispatcher.engine import MEMORY_READ_ATTEMPTS, Engine, JobRun
 from dispatcher.gates import MemoryReadError
 from dispatcher.gates import AdmissionGate
 from dispatcher.lifecycle import Completed
-from dispatcher.lock import DispatcherLock
-from support import GOOD, FakeProc, FakeShell, stream, write_task_record
+from .support import GOOD, FakeProc, FakeShell, stream, write_task_record
 
 
 @pytest.fixture
@@ -39,14 +40,14 @@ def world(settings, tmp_path):
         },
         {
             "Type": "bind",
-            "Source": str(odoo_dev_dir()),
-            "Destination": "/usr/local/share/odoo-dev",
+            "Source": str(settings.home),
+            "Destination": CONTAINER_HOME,
         },
     ]
     shell.reply(["docker", "inspect"], Completed(0, json.dumps(mounts)))
-    jobs, runs = JobStore(), RunStore()
+    jobs = JobStore(home=settings.home)
     gate = AdmissionGate(1, 0, meminfo=mem)
-    engine = Engine(settings, jobs, runs, shell, gate, log=lambda m: None)
+    engine = Engine(settings, jobs, shell, gate, log=lambda m: None)
     return engine, shell, mem
 
 
@@ -64,21 +65,21 @@ def test_a_good_run_completes_and_is_recorded(world):
     done = engine.jobs.get(job.job_id)
     assert done.state is JobState.DONE and done.outcome == "COMPLETED"
     assert done.session_id == "sess-1" and not engine.errors
-    run = engine.runs.get_run("sess-1")
-    assert (
-        run.job_id == job.job_id
-        and run.task_id == "10"
-        and run.ended_us >= run.started_us
+    assert done.ended_us >= done.started_us
+    assert done.envelope_json()["structured_output"]["outcome"] == "done"
+    assert done.tool_version == "9.9.9" and done.question_count == 0
+    assert done.has_envelope and done.has_session is False
+    assert done.bundle_dir == str(
+        job_bundle_dir("10", job.job_id, engine.settings.home)
     )
-    assert engine.runs.get_artifacts(job.job_id).has_envelope
     argv, env = shell.spawned[0]
     assert argv[0:2] == ["devcontainer", "exec"] and "COMPOSE_PROJECT_NAME" not in env
     assert "ODOO_ACTIVE_REPOS" not in env
-    assert bundle_dir(job.job_id).is_dir()
+    assert Path(done.bundle_dir).is_dir()
     assert shell.commands("docker", "compose", "-p", "qoc", "stop")  # idle: stopped
 
 
-def test_the_run_rows_clock_starts_at_the_spawn_not_at_admission(world):
+def test_the_job_row_window_starts_at_the_spawn_and_ends_at_the_session_end(world):
     engine, shell, _ = world
     shell.proc = FakeProc(stream(structured=GOOD))
     base = now_us()
@@ -96,14 +97,10 @@ def test_the_run_rows_clock_starts_at_the_spawn_not_at_admission(world):
     shell.proc.wait = lambda: advance(session_s) or real_wait()
     (job,) = _submit(engine, ("qoc", "10"))
     engine.run()
-    admitted = engine.jobs.get(job.job_id).started_us  # the wall clock at mark_running
-    run = engine.runs.get_run("sess-1")
-    assert run.started_us == base + up_s * 1_000_000  # the spawn, after devcontainer up
-    assert run.ended_us - run.started_us == session_s * 1_000_000
-    assert (
-        run.started_us - admitted > (up_s - 60) * 1_000_000
-    )  # the cold start is not billed
-    assert admitted < base + 60 * 1_000_000  # the job row keeps the admit time
+    row = engine.jobs.get(job.job_id)
+    assert row.started_us == base + up_s * 1_000_000  # the spawn clock, not admission
+    assert row.ended_us - row.started_us == session_s * 1_000_000  # no cold start
+    assert row.ended_us == base + (up_s + session_s) * 1_000_000
 
 
 def test_a_run_row_without_a_spawn_falls_back_to_the_admit_time(world, monkeypatch):
@@ -124,7 +121,7 @@ def test_a_run_row_without_a_spawn_falls_back_to_the_admit_time(world, monkeypat
     admitted = engine.jobs.get(job.job_id).started_us
     assert not shell.spawned and admitted > 0
     assert seen["started_us"] == admitted and seen["ended_us"] >= admitted
-    assert engine.runs.iter_runs() == []  # no session id, so no run row
+    assert engine.jobs.get(job.job_id).session_id == ""
 
 
 def test_collection_runs_before_the_container_may_stop(world, monkeypatch):
@@ -148,7 +145,7 @@ def test_collection_runs_before_the_container_may_stop(world, monkeypatch):
     assert order.index("collect") < order.index("compose")
 
 
-def test_a_dead_letter_still_records_the_run_and_the_bundle(world):
+def test_a_dead_letter_still_indexes_the_bundle(world):
     engine, shell, _ = world
     shell.proc = FakeProc(stream(is_error=True, subtype="success"), returncode=1)
     (job,) = _submit(engine, ("qoc", "11"))
@@ -157,11 +154,11 @@ def test_a_dead_letter_still_records_the_run_and_the_bundle(world):
     assert dead.state is JobState.DEAD_LETTER
     assert dead.dead_reason == DeadReason.STRUCTURED_OUTPUT_MISSING.value
     assert "is_error=true" in dead.detail and "worktree" in dead.detail
-    assert engine.runs.get_run("sess-1").outcome.value == "FAILED"
-    assert bundle_dir(job.job_id).is_dir()
+    assert dead.outcome == "" and dead.session_id == "sess-1"
+    assert dead.has_envelope and Path(dead.bundle_dir).is_dir()
 
 
-def test_session_launch_failure_has_a_bundle_and_no_run(world):
+def test_session_launch_failure_has_a_bundle_and_no_session(world):
     engine, shell, _ = world
     shell.proc = FakeProc([], returncode=127, stderr="claude: not found")
     (job,) = _submit(engine, ("qoc", "12"))
@@ -169,8 +166,7 @@ def test_session_launch_failure_has_a_bundle_and_no_run(world):
     dead = engine.jobs.get(job.job_id)
     assert dead.dead_reason == DeadReason.SESSION_LAUNCH_FAILED.value
     assert "claude: not found" in dead.detail
-    assert engine.runs.iter_runs() == []
-    assert engine.runs.get_artifacts(job.job_id) is not None
+    assert dead.session_id == "" and dead.bundle_dir
 
 
 def test_spawn_oserror_is_a_launch_failure(world):
@@ -195,7 +191,7 @@ def test_container_start_failure(world):
     dead = engine.jobs.get(job.job_id)
     assert dead.dead_reason == DeadReason.CONTAINER_START_FAILED.value
     assert "compose file missing" in dead.detail
-    assert not shell.spawned and engine.runs.get_artifacts(job.job_id) is not None
+    assert not shell.spawned and engine.jobs.get(job.job_id).bundle_dir != ""
 
 
 def test_workspace_mount_invalid(world):
@@ -223,36 +219,6 @@ def test_an_unresolvable_config_dead_letters_one_job_and_the_run_continues(world
     assert engine.jobs.get(good.job_id).dead_reason != (
         DeadReason.CONTAINER_START_FAILED.value
     )
-
-
-def test_the_shared_repo_map_is_copied_into_the_bundle_before_up(world):
-    engine, shell, _ = world
-    engine.settings.repo_map_file.write_text('{"projects": {"p": 1}}', "utf-8")
-    (job,) = _submit(engine, ("qoc", "20"))
-    seeded = {}
-
-    def spy(*args, **kwargs):
-        seeded["text"] = (bundle_dir(job.job_id) / "repo-map.json").read_text("utf-8")
-        return real(*args, **kwargs)
-
-    real = lifecycle.up
-    lifecycle.up = spy
-    try:
-        assert JobRun(engine, engine.jobs.get(job.job_id)).admit() is True
-    finally:
-        lifecycle.up = real
-    assert seeded["text"] == '{"projects": {"p": 1}}'
-
-
-def test_a_missing_repo_map_dead_letters_one_job_and_the_run_continues(world):
-    engine, shell, _ = world
-    (job,) = _submit(engine, ("qoc", "21"))
-    missing = engine.settings.repo_map_file
-    missing.unlink()
-    engine.run()
-    dead = engine.jobs.get(job.job_id)
-    assert dead.dead_reason == DeadReason.CONTAINER_START_FAILED.value
-    assert str(missing) in dead.detail and "repo map" in dead.detail
 
 
 PG = ["docker", "exec", "c", "pg_isready"]
@@ -296,7 +262,7 @@ def test_an_expired_wait_is_a_container_start_failure(world, monkeypatch):
     assert "pg_isready exit=2" in dead.detail
     assert "accepting no connections" in dead.detail
     assert "odoo --version exit=127" in dead.detail
-    assert not shell.spawned and engine.runs.get_artifacts(job.job_id) is not None
+    assert not shell.spawned and engine.jobs.get(job.job_id).bundle_dir != ""
 
 
 def test_unexpected_admit_error_dead_letters_then_raises(world):
@@ -446,14 +412,15 @@ def test_a_record_failure_is_surfaced_after_the_rest_of_the_finally(world, monke
     engine, shell, _ = world
     shell.proc = FakeProc(stream(structured=GOOD))
     monkeypatch.setattr(
-        engine.runs, "record_run", lambda **k: (_ for _ in ()).throw(RuntimeError("db"))
+        engine.jobs,
+        "record_result",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("db")),
     )
     (job,) = _submit(engine, ("qoc", "21"))
     engine.run()
     assert len(engine.errors) == 1
-    assert engine.jobs.get(job.job_id).state is JobState.DONE
-    assert engine.runs.get_artifacts(job.job_id) is not None
-    assert shell.commands("docker", "compose", "-p", "qoc", "stop")
+    assert engine.jobs.get(job.job_id).state is JobState.RUNNING  # left for reconcile
+    assert engine.jobs.count_live("qoc") == 1  # so the container is not stopped
 
 
 def test_duplicate_task_never_runs(world):
@@ -729,7 +696,7 @@ def test_worktree_is_left_alone_when_reap_cannot_prove_a_push(world):
     shell.proc = FakeProc(stream(structured=GOOD))
     (job,) = _submit(engine, ("qoc", "90"))
     write_task_record(
-        job.job_id,
+        engine.settings.home,
         job.task_id,
         json.dumps(
             {"build": {"branch": "feat", "worktree": "/mnt/extra-addons/.worktrees/x"}}
@@ -747,7 +714,7 @@ def test_a_pushed_worktree_is_reaped_through_the_container_before_the_idle_check
     (job,) = _submit(engine, ("qoc", "92"))
     (settings.workspace("qoc") / ".worktrees/x").mkdir(parents=True)
     write_task_record(
-        job.job_id,
+        engine.settings.home,
         job.task_id,
         json.dumps(
             {"build": {"branch": "feat", "worktree": "/mnt/extra-addons/.worktrees/x"}}
@@ -793,19 +760,16 @@ def _env(monkeypatch, tmp_path):
     config = tmp_path / "c" / "github.com" / "any-owner" / "qoc" / ".devcontainer"
     config.mkdir(parents=True, exist_ok=True)
     (config / "devcontainer.json").write_text("{}", "utf-8")
-    repo_map = tmp_path / "repo-map.json"
-    repo_map.write_text('{"projects": {}}', "utf-8")
-    monkeypatch.setenv("DISPATCH_REPO_MAP_FILE", str(repo_map))
 
 
-def test_cli_refuses_when_another_dispatcher_holds_the_lock(state_root, capsys):
-    with DispatcherLock(state_root / "dispatcher.lock"):
+def test_cli_refuses_when_another_dispatcher_holds_the_lock(home, capsys):
+    with exclusive("dispatcher", home=home):
         assert cli.main(["run"]) == cli.EXIT_LOCKED
     assert "another dispatcher" in capsys.readouterr().err
 
 
-def test_cli_takes_the_lock_before_validating_anything(state_root, capsys):
-    with DispatcherLock(state_root / "dispatcher.lock"):
+def test_cli_takes_the_lock_before_validating_anything(home, capsys):
+    with exclusive("dispatcher", home=home):
         assert cli.main(["run", "not json"]) == cli.EXIT_LOCKED
 
 
@@ -862,8 +826,8 @@ def test_cli_run_prints_the_report(monkeypatch, tmp_path, capsys, settings):
                     },
                     {
                         "Type": "bind",
-                        "Source": str(odoo_dev_dir()),
-                        "Destination": "/usr/local/share/odoo-dev",
+                        "Source": str(settings.home),
+                        "Destination": CONTAINER_HOME,
                     },
                 ]
             ),

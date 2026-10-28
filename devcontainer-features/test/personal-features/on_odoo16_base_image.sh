@@ -1,10 +1,10 @@
 #!/bin/bash
 
 # Executed against the 'on_odoo16_base_image' scenario in scenarios.json.
-# odoo:16 is Debian 11 (bullseye) and ships only Python 3.9.2 - below odoo_sdk's
+# odoo:16 is Debian 11 (bullseye) and ships only Python 3.9.2 - below odoo_client's
 # requires-python (>=3.10). install.sh used to gate the ENTIRE Python block on
 # the base image's python3, so this image silently got no uv, no tool env, no
-# odoo-sdk/odoo-mcp/odoo-tui and no mempalace, surfacing weeks later as a
+# odoo-dev/odoo-mcp/odoo-tui and no mempalace, surfacing weeks later as a
 # confusing ENOENT from a stale bind-mounted MCP registration (#674).
 #
 # Since #674 the venv carries its own uv-managed CPython (pinned in install.sh),
@@ -45,23 +45,23 @@ check "base image still ships the pre-3.10 system Python this scenario exists fo
 
 # The full toolchain must now be present despite the old system Python.
 check "uv is installed" bash -c "command -v uv"
-check "odoo-sdk tool env exists" bash -c "test -d /usr/local/share/uv/tools/odoo-sdk"
+check "odoo-dev tool env exists" bash -c "test -d /usr/local/share/uv/tools/odoo-dev"
 
 # The tool env must run the uv-managed pinned interpreter, not the system 3.9
 # (which could not even import the SDK's dependency tree).
 check "tool env runs the pinned uv-managed CPython 3.11, not the system 3.9 (#674)" \
-    bash -c "/usr/local/share/uv/tools/odoo-sdk/bin/python -c '
+    bash -c "/usr/local/share/uv/tools/odoo-dev/bin/python -c '
 import sys
 assert sys.version_info[:2] == (3, 11), sys.version
 '"
 
-# odoo_sdk: installed into the isolated tool environment.
-check "odoo_sdk is importable in tool env" \
-    bash -c "/usr/local/share/uv/tools/odoo-sdk/bin/python -c 'import odoo_sdk'"
+# odoo_client: installed into the isolated tool environment.
+check "odoo_client is importable in tool env" \
+    bash -c "/usr/local/share/uv/tools/odoo-dev/bin/python -c 'import odoo_client'"
 
-check "odoo_sdk core API is accessible in tool env" \
-    bash -c "/usr/local/share/uv/tools/odoo-sdk/bin/python -c '
-from odoo_sdk import (
+check "odoo_client core API is accessible in tool env" \
+    bash -c "/usr/local/share/uv/tools/odoo-dev/bin/python -c '
+from odoo_client import (
     OdooClient,
     OdooConnectionSettings,
     OdooExecutor,
@@ -71,11 +71,11 @@ from odoo_sdk import (
 )
 '"
 
-# All three console scripts must be linked onto PATH (#496): odoo-sdk is what
+# All three console scripts must be linked onto PATH (#496): odoo-dev is what
 # claude-event-hook shells out to, odoo-mcp is what the MCP registration spawns
 # (the ENOENT in #674), and odoo-tui is the operator TUI (#120).
-check "odoo-sdk console script is on PATH" bash -c "command -v odoo-sdk"
-check "odoo-sdk entrypoint is executable" bash -c "test -x \"\$(command -v odoo-sdk)\""
+check "odoo-dev console script is on PATH" bash -c "command -v odoo-dev"
+check "odoo-dev entrypoint is executable" bash -c "test -x \"\$(command -v odoo-dev)\""
 check "odoo-mcp console script is on PATH" bash -c "command -v odoo-mcp"
 check "odoo-mcp entrypoint is executable" bash -c "test -x \"\$(command -v odoo-mcp)\""
 check "odoo-tui console script is on PATH" bash -c "command -v odoo-tui"

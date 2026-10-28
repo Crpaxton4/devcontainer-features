@@ -1,5 +1,5 @@
 """The host-side task dispatcher.
 
 The only program on the machine that runs ``devcontainer`` or ``claude``. It
-depends on :mod:`odoo_sdk` (its persistence layer) and never the reverse.
+keeps its state in the suite's ``state.db`` through ``odoo_dev_data.jobs``.
 """

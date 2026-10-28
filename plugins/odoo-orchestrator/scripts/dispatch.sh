@@ -43,12 +43,12 @@ if [[ -z ${ODOO_ORCHESTRATOR_DOCKER_GID:-} ]]; then
 fi
 export ODOO_ORCHESTRATOR_UID ODOO_ORCHESTRATOR_GID ODOO_ORCHESTRATOR_DOCKER_GID
 # A missing bind source would be created by the daemon, owned by root. Create
-# every bind source of stack/compose.yaml here, with the defaults compose uses.
-state_dir=${ODOO_DISPATCH_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/odoo-task-tracker}
-orchestrator_home=${ODOO_ORCHESTRATOR_HOME:-$HOME/.local/state/odoo-orchestrator}
-mkdir -p "$HOME/.local/state/usage-log"
-mkdir -p "${DISPATCH_ARTIFACTS_DIR:-$HOME/.config/odoo-dev/dispatch/artifacts}"
-mkdir -p "$state_dir" "$orchestrator_home"
+# the one state root of stack/compose.yaml here, with the default compose uses.
+odoo_dev_home=${ODOO_DEV_HOME:-$HOME/.config/odoo-dev}
+if [[ ! -d $odoo_dev_home ]]; then
+    mkdir -p "$odoo_dev_home" && chmod 0700 "$odoo_dev_home"
+fi
+export ODOO_DEV_HOME=$odoo_dev_home
 
 compose=(docker compose -f "$stack_file")
 dispatch=("${compose[@]}" run --rm -T dispatcher dispatch)

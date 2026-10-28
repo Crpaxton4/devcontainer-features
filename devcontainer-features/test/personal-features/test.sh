@@ -203,7 +203,6 @@ check "the #806 provision marker fingerprints the claude wrapper (#807)" bash -c
 
 check "claude config dir exists" bash -c "test -d /usr/local/share/claude-home"
 check "gh config dir exists" bash -c "test -d /usr/local/share/gh-cli-config"
-check "odoo-sdk config dir exists" bash -c "test -d /usr/local/share/odoo-sdk-config"
 check "CLAUDE_CONFIG_DIR points at the bind mount" bash -c "[ \"\$CLAUDE_CONFIG_DIR\" = '/usr/local/share/claude-home' ]"
 check "GH_CONFIG_DIR points at the bind mount" bash -c "[ \"\$GH_CONFIG_DIR\" = '/usr/local/share/gh-cli-config' ]"
 
@@ -217,54 +216,36 @@ check "GH_CONFIG_DIR points at the bind mount" bash -c "[ \"\$GH_CONFIG_DIR\" = 
 check "HF_HUB_DISABLE_SHARED_BLOBS is set for every container process (#931)" bash -c \
   "[ \"\$HF_HUB_DISABLE_SHARED_BLOBS\" = '1' ]"
 
-# #884: the odoo-dev plugin resolves its state dir as
-# ${ODOO_DEV_STATE_DIR:-$HOME/.local/share/odoo-dev}. $HOME is container-local
-# image storage, so without this mount every task artifact, repo-map.json and
-# release record is discarded on the next rebuild. containerEnv is the single
-# place the variable is set, so the plugin resolves the mount instead.
-check "odoo-dev state dir exists" bash -c "test -d /usr/local/share/odoo-dev"
-check "ODOO_DEV_STATE_DIR points at the bind mount (#884)" bash -c \
-  "[ \"\$ODOO_DEV_STATE_DIR\" = '/usr/local/share/odoo-dev' ]"
+# The suite's one state root: ODOO_DEV_HOME holds config.toml, repo-map.json,
+# state.db, usage.db, tasks/ and locks/. $HOME is container-local image storage,
+# so without this mount all of it is discarded on the next rebuild.
+check "odoo-dev state root exists" bash -c "test -d /usr/local/share/odoo-dev"
+check "ODOO_DEV_HOME points at the bind mount" bash -c \
+  "[ \"\$ODOO_DEV_HOME\" = '/usr/local/share/odoo-dev' ]"
+check "usage-log CLI is on PATH when the wheels are bundled" bash -c \
+  "! test -x /usr/local/bin/odoo-mcp || command -v usage-log"
 
-# #1204: the usage-log stores live in a bind mount, and USAGE_LOG_DIR (set only
-# here, in containerEnv) is what switches logging on; host sessions never set it.
-check "usage-log dir exists" bash -c "test -d /usr/local/share/usage-log"
-check "USAGE_LOG_DIR points at the bind mount (#1204)" bash -c \
-  "[ \"\$USAGE_LOG_DIR\" = '/usr/local/share/usage-log' ]"
-check "usage-log dir is 0777 (writers in several containers, #1204)" bash -c \
-  "[ \"\$(stat -c '%a' /usr/local/share/usage-log)\" = '777' ]"
-check "usage-log CLI is on PATH when the wheel is bundled (#1204)" bash -c \
-  "! ls /usr/local/share/uv/tools/odoo-sdk/lib/python*/site-packages/usage_log >/dev/null 2>&1 || command -v usage-log"
-
-# #239: the SDK config env var is the uppercase ODOO_SDK_CONFIG pointing at the
-# mount DIRECTORY (the SDK probes it for config.toml/config.ini). The old
-# lowercase odoo_sdk_CONFIG (which pointed at a specific config.ini file) must be
-# gone - a case-sensitive stale name would leave the SDK reading nothing.
-check "ODOO_SDK_CONFIG points at the bind mount dir" bash -c \
-  "[ \"\$ODOO_SDK_CONFIG\" = '/usr/local/share/odoo-sdk-config' ]"
-check "legacy lowercase odoo_sdk_CONFIG is not set" bash -c "[ -z \"\$odoo_sdk_CONFIG\" ]"
-
-# NOTE: no check here that the odoo-sdk MCP server is registered. install.sh
+# NOTE: no check here that the odoo-mcp MCP server is registered. install.sh
 # registers it at BUILD time into CLAUDE_CONFIG_DIR=/usr/local/share/claude-home,
 # but at RUNTIME that directory is shadowed by the feature's bind mount of the
 # host's ~/.claude (empty on CI runners and fresh hosts), so `claude mcp get
-# odoo-sdk` reports the server as missing whenever the mount is active - i.e.
+# odoo-mcp` reports the server as missing whenever the mount is active - i.e.
 # always in real use. Asserting it here would test something the feature cannot
 # deliver; a runtime-registration mechanism (e.g. a feature-contributed
 # postCreateCommand) is a separate product decision.
 
 # Regression guard for #120: the odoo-tui curses TUI console script is symlinked
-# onto PATH whenever the SDK is installed (i.e. whenever odoo-mcp is present).
-# Gated on the odoo-mcp binary so it no-ops when no SDK wheel was bundled (e.g.
+# onto PATH whenever the suite is installed (i.e. whenever odoo-mcp is present).
+# Gated on the odoo-mcp binary so it no-ops when no wheel was bundled (e.g.
 # a plain `devcontainer features test` without CI's wheel-bundling step; since
 # #674 the base image's Python version is irrelevant - the tool env carries its
 # own uv-managed interpreter). PATH checks are unaffected by the bind mounts
 # above.
-check "odoo-tui console script is on PATH when the SDK is installed" bash -c \
+check "odoo-tui console script is on PATH when the suite is installed" bash -c \
   "! test -x /usr/local/bin/odoo-mcp || test -x \"\$(command -v odoo-tui)\""
 
 # Regression guard for #674's first cut: the venv shebang points at
-# $_SDK_ENV/bin/python, itself a symlink to the uv-managed CPython. uv's default
+# $_SUITE_ENV/bin/python, itself a symlink to the uv-managed CPython. uv's default
 # install dir is under the installing user's HOME - root's, mode 0700 - so every
 # console script exec'd as a non-root remoteUser died with
 # `bad interpreter: Permission denied`. Only the images with a non-root
@@ -273,44 +254,14 @@ check "odoo-tui console script is on PATH when the SDK is installed" bash -c \
 # is, not merely that the symlink resolves - `test -x` follows the link and
 # would pass on an unreadable target's mode bits.
 check "the uv-managed interpreter is runnable by a non-root remoteUser" bash -c \
-  "! test -x /usr/local/bin/odoo-mcp || /usr/local/share/uv/tools/odoo-sdk/bin/python -c 'import sys; print(sys.executable)'"
+  "! test -x /usr/local/bin/odoo-mcp || /usr/local/share/uv/tools/odoo-dev/bin/python -c 'import sys; print(sys.executable)'"
 
-# #369: the central tracker DB is HOST-provisioned and bind-mounted; the
-# container consumes it and never creates one. This reverses the #115 stance
-# (which wrongly concluded the state dir couldn't be mounted): updateRemoteUserUID
-# remaps the user at container-create so bind mounts line up - the six credential
-# mounts already prove it - and install.sh must NOT pre-create the tracker target
-# (provision=host in persisted-paths.tsv), or a broken mount would masquerade as a
-# working one behind an empty container-local DB. CI runs `sh ./setup.sh` on the
-# runner before this test, so the host dir + schema exist and the mount delivers
-# them at $ODOO_TASK_TRACKER_DIR.
-#
-# #552/#533: both checks used to gate on `! command -v odoo-sdk || {...}`, but
-# install.sh symlinks only odoo-mcp/odoo-tui onto PATH - `odoo-sdk` never
-# resolves, so the guard short-circuited to a vacuous exit 0 and NEITHER body had
-# ever executed. They now gate on the real "is the SDK installed at all"
-# condition the :69 check uses (/usr/local/bin/odoo-mcp, absent only when no
-# wheel was bundled - the base image's Python no longer matters, #674) and
-# invoke the CLI at its uv-managed venv path, the same one the #411 e2e check
-# below resolves.
-_SDK_CLI=/usr/local/share/uv/tools/odoo-sdk/bin/odoo-sdk
-
-# POSITIVE: with the mount live, `odoo-sdk log-event` writes into the central DB.
-# A missing/unmounted DB would make log-event exit non-zero (the hard error
-# below), so a successful write that lands tracker.db at the mounted path is the
-# rebuild-surviving derivation reachability of acceptance #3. No
-# --attach-active-run, so the row stays untargeted and accrues no billable time
-# against a real run if this ever runs against a host-provisioned DB.
-check "odoo-sdk log-event writes to the host-provisioned central tracker DB" bash -c \
-  "! test -x /usr/local/bin/odoo-mcp || { $_SDK_CLI log-event --source claude:SessionStart --subject ci-positive && test -f \"\$ODOO_TASK_TRACKER_DIR/tracker.db\"; }"
-
-# NEGATIVE: point the state root at an empty dir with no host-provisioned DB; the
-# SDK must refuse to self-create one and fail with the single actionable error
-# naming the expected path (acceptance #4), never exiting 0 silently. Chained
-# with && (not ;) so the non-zero-exit half is actually asserted: `check` runs
-# the body in a child shell that does not inherit this file's `set -e`.
-check "odoo-sdk refuses to self-create a missing central tracker DB" bash -c \
-  "! test -x /usr/local/bin/odoo-mcp || { d=\"\$(mktemp -d)\"; ! ODOO_TASK_TRACKER_DIR=\"\$d\" $_SDK_CLI log-event --source claude:SessionStart --subject ci-negative 2>\"\$d/err\" && grep -q \"\$d/tracker.db\" \"\$d/err\" && ! test -f \"\$d/tracker.db\"; }"
+# With the state root live, `odoo-dev log-event` writes state.db under
+# ODOO_DEV_HOME. Gated on the odoo-mcp binary (absent only when no wheel was
+# bundled, #674). No --attach-active-run, so the row stays untargeted and accrues
+# no billable time against a real run.
+check "odoo-dev log-event writes state.db under ODOO_DEV_HOME" bash -c \
+  "! test -x /usr/local/bin/odoo-mcp || { odoo-dev log-event --source claude:SessionStart --subject ci-positive && test -f \"\$ODOO_DEV_HOME/state.db\"; }"
 
 # productivity/navigation CLIs
 check "ripgrep is installed" rg --version
@@ -934,22 +885,22 @@ check "worktree-context-hook passes shell syntax check" bash -c "bash -n /usr/lo
 # passed *precisely because* the glob was the broken `mcp__odoo__*` and would
 # have FAILED the moment it was corrected - rubber-stamping a guard that never
 # matched a real tool name, so odoo calls were double-logged (#529/#551). The
-# #529 correction to `mcp__odoo-sdk__*` was still wrong: the server key is
-# `odoo-mcp`, not `odoo-sdk` (#581), so the real prefix is `mcp__odoo-mcp__*`.
+# #529 correction was still wrong: the server key is `odoo-mcp` (#581), so the
+# real prefix is `mcp__odoo-mcp__*`.
 #
-# Assert the emitted command line instead. `odoo-sdk` is stubbed onto PATH so the
+# Assert the emitted command line instead. `odoo-dev` is stubbed onto PATH so the
 # shim resolves it and records the argv it built; no real SDK is needed. Claude
 # Code namespaces MCP tools as `mcp__<server-key>__<tool>` with the key's hyphens
 # preserved, and install.sh registers the key `odoo-mcp`, so
 # `mcp__odoo-mcp__get_tasks` below is a production-shaped tool name.
 HOOK_STUB_ROOT="$(mktemp -d)"
 mkdir -p "$HOOK_STUB_ROOT/bin"
-cat > "$HOOK_STUB_ROOT/bin/odoo-sdk" <<'STUB'
+cat > "$HOOK_STUB_ROOT/bin/odoo-dev" <<'STUB'
 #!/bin/sh
 # Stand-in for the real CLI: one line per invocation, recording the whole argv.
 printf '%s\n' "$*" >> "$HOOK_STUB_LOG"
 STUB
-chmod +x "$HOOK_STUB_ROOT/bin/odoo-sdk"
+chmod +x "$HOOK_STUB_ROOT/bin/odoo-dev"
 export HOOK_STUB_BIN="$HOOK_STUB_ROOT/bin"
 export HOOK_STUB_LOG="$HOOK_STUB_ROOT/invocations"
 : > "$HOOK_STUB_LOG"
@@ -974,7 +925,7 @@ check "claude-event-hook logs a normal tool but excludes mcp__odoo-mcp__* tools"
   sleep 1
 
   grep -q -- "--source claude:PreToolUse" "$HOOK_STUB_LOG" \
-    || { echo "shim never invoked odoo-sdk for a non-odoo PreToolUse tool" >&2; exit 1; }
+    || { echo "shim never invoked odoo-dev for a non-odoo PreToolUse tool" >&2; exit 1; }
   grep -q -- "--subject Bash" "$HOOK_STUB_LOG" \
     || { echo "shim did not forward --subject Bash" >&2; exit 1; }
   if grep -q -- "mcp__odoo-mcp__" "$HOOK_STUB_LOG"; then
@@ -984,16 +935,16 @@ check "claude-event-hook logs a normal tool but excludes mcp__odoo-mcp__* tools"
   # Exactly one row: proves the exclusion dropped the odoo call rather than the
   # assertions above merely failing to notice a second, differently-shaped one.
   [ "$(wc -l < "$HOOK_STUB_LOG")" -eq 1 ] \
-    || { echo "expected exactly 1 odoo-sdk invocation, got $(wc -l < "$HOOK_STUB_LOG")" >&2; exit 1; }
+    || { echo "expected exactly 1 odoo-dev invocation, got $(wc -l < "$HOOK_STUB_LOG")" >&2; exit 1; }
 '
 rm -rf "$HOOK_STUB_ROOT"
 unset HOOK_STUB_BIN HOOK_STUB_LOG
 
 # --- sidechain exclusion + repo attribution (#742) ----------------------------
-# Two behaviours, same stub-`odoo-sdk`-on-PATH technique as above (assert the
+# Two behaviours, same stub-`odoo-dev`-on-PATH technique as above (assert the
 # argv the shim BUILT, no real SDK needed):
 #
-#   * A subagent's Pre/PostToolUse must produce NO odoo-sdk invocation at all.
+#   * A subagent's Pre/PostToolUse must produce NO odoo-dev invocation at all.
 #     Claude Code stamps `agent_id`/`agent_type` onto every hook payload fired
 #     inside a sidechain, and the parent session is already billing that span -
 #     logging the subagent's tool calls too double-counted them (~17.5k Bash
@@ -1008,12 +959,12 @@ unset HOOK_STUB_BIN HOOK_STUB_LOG
 #     directory name.
 REPO_STUB_ROOT="$(mktemp -d)"
 mkdir -p "$REPO_STUB_ROOT/bin"
-cat > "$REPO_STUB_ROOT/bin/odoo-sdk" <<'STUB'
+cat > "$REPO_STUB_ROOT/bin/odoo-dev" <<'STUB'
 #!/bin/sh
 # Stand-in for the real CLI: one line per invocation, recording the whole argv.
 printf '%s\n' "$*" >> "$HOOK_STUB_LOG"
 STUB
-chmod +x "$REPO_STUB_ROOT/bin/odoo-sdk"
+chmod +x "$REPO_STUB_ROOT/bin/odoo-dev"
 export HOOK_STUB_BIN="$REPO_STUB_ROOT/bin"
 export HOOK_STUB_LOG="$REPO_STUB_ROOT/invocations"
 export HOOK_GIT_REMOTE="$REPO_STUB_ROOT/with-remote"
@@ -1068,14 +1019,14 @@ check "claude-event-hook falls back to the toplevel basename when the cwd has no
 rm -rf "$REPO_STUB_ROOT"
 unset HOOK_STUB_BIN HOOK_STUB_LOG HOOK_GIT_REMOTE HOOK_GIT_BARE
 
-# The shim must always exit 0 and pass --attach-active-run to odoo-sdk.
+# The shim must always exit 0 and pass --attach-active-run to odoo-dev.
 check "claude-event-hook attaches the active run" bash -c \
   "grep -q -- '--attach-active-run' /usr/local/bin/claude-event-hook"
 
-# The shim must no-op (exit 0) when odoo-sdk is absent from PATH. Run it with a
-# stripped PATH (coreutils only) so `odoo-sdk` cannot be found and pipe it an
+# The shim must no-op (exit 0) when odoo-dev is absent from PATH. Run it with a
+# stripped PATH (coreutils only) so `odoo-dev` cannot be found and pipe it an
 # empty payload; a nonzero exit here would block a real Claude session.
-check "claude-event-hook no-ops with exit 0 when odoo-sdk is absent" bash -c \
+check "claude-event-hook no-ops with exit 0 when odoo-dev is absent" bash -c \
   "printf '{}' | PATH=/usr/bin:/bin /usr/local/bin/claude-event-hook PreToolUse; test \$? -eq 0"
 
 # #411: hook<->CLI CONTRACT, exercised end to end. The grep guards above only
@@ -1089,35 +1040,26 @@ check "claude-event-hook no-ops with exit 0 when odoo-sdk is absent" bash -c \
 # the billing predicate that keys on the `claude:` prefix. A flag/prefix drift
 # fails this loudly.
 #
-# Self-contained by design: it provisions its OWN throwaway tracker DB with the
-# SDK schema and points the shim at it via ODOO_TASK_TRACKER_DIR, so it runs
-# deterministically whether or not a host-provisioned central DB is mounted (it
-# is under CI's setup.sh, but NOT under a plain `devcontainer features test`) and
-# never touches the real DB. Gated on the SDK being installed (absent only when
-# no wheel was bundled - #674); the SDK bin dir is put on PATH so the shim's bare `odoo-sdk` resolves
-# to the real installed CLI. `odoo-sdk` is deliberately NOT on the default PATH
-# (only odoo-mcp/odoo-tui are symlinked), so this uses the venv bin explicitly.
+# Self-contained by design: it points the shim at a throwaway ODOO_DEV_HOME, so it
+# runs deterministically and never touches the real state root. Gated on the
+# suite being installed (absent only when no wheel was bundled - #674).
 # shellcheck disable=SC2016  # single quotes defer expansion into the check subshell
-check "claude-event-hook drives a real PreToolUse event through --attach-active-run/--payload into a provisioned DB" bash -c '
-  SDK_BIN=/usr/local/share/uv/tools/odoo-sdk/bin
-  test -x "$SDK_BIN/odoo-sdk" || exit 0
+check "claude-event-hook drives a real PreToolUse event through --attach-active-run/--payload into a throwaway state root" bash -c '
+  SDK_BIN=/usr/local/share/uv/tools/odoo-dev/bin
+  test -x "$SDK_BIN/odoo-dev" || exit 0
   STATE="$(mktemp -d)"
-  DB="$STATE/tracker.db"
-  # Provision a throwaway central DB with the SDK schema (never the real one).
-  "$SDK_BIN/python" -c "import sqlite3, sys; from odoo_sdk.state.db import create_schema; c = sqlite3.connect(sys.argv[1]); create_schema(c); c.commit(); c.close()" "$DB" \
-    || { echo "failed to provision temp tracker DB at $DB" >&2; rm -rf "$STATE"; exit 1; }
+  DB="$STATE/state.db"
   subj="ci-hook-e2e-$$"
   printf "{\"session_id\":\"s-%s\",\"tool_name\":\"%s\",\"hook_event_name\":\"PreToolUse\",\"cwd\":\"/tmp\"}" "$$" "$subj" \
-    | ODOO_TASK_TRACKER_DIR="$STATE" PATH="$SDK_BIN:$PATH" /usr/local/bin/claude-event-hook PreToolUse
-  # The shim fires the SDK write in a DETACHED background job, so poll the DB.
+    | ODOO_DEV_HOME="$STATE" PATH="$SDK_BIN:$PATH" /usr/local/bin/claude-event-hook PreToolUse
+  # The shim fires the write in a DETACHED background job, so poll the DB.
   for _ in $(seq 1 50); do
     "$SDK_BIN/python" - "$DB" "$subj" <<PY && { rm -rf "$STATE"; exit 0; }
 import json, sqlite3, sys
-from odoo_sdk.state.db import _DEVELOPMENT_SOURCE_PREDICATE
 db, subj = sys.argv[1], sys.argv[2]
 conn = sqlite3.connect(db)
 row = conn.execute(
-    f"SELECT source, payload FROM events WHERE subject = ? AND {_DEVELOPMENT_SOURCE_PREDICATE}",
+    "SELECT source, payload FROM events WHERE subject = ?",
     (subj,),
 ).fetchone()
 if row is None:
@@ -1129,7 +1071,7 @@ sys.exit(0)
 PY
     sleep 0.2
   done
-  echo "no billing-eligible claude:PreToolUse row for subject $subj ever landed" >&2
+  echo "no claude:PreToolUse row for subject $subj ever landed" >&2
   rm -rf "$STATE"
   exit 1
 '
@@ -1157,7 +1099,7 @@ check "sync-claude-hooks publishes the event shim into the shared config dir" ba
 check "no feature hook command bakes in a container-only absolute path (#803)" bash -c \
   "! jq -r '.hooks[] | .[] | .hooks[] | .command' \"$HK_A/settings.json\" | grep -q '^/usr/local/'"
 check "the written hook command resolves and exits 0 in-container" bash -c \
-  "cmd=\"\$(jq -r '.hooks.SessionStart[0].hooks[0].command' \"$HK_A/settings.json\")\"; CLAUDE_CONFIG_DIR=\"$HK_A\" ODOO_TASK_TRACKER_DIR=\"$HOOKS_TEST_ROOT/state\" sh -c \"\$cmd\" </dev/null"
+  "cmd=\"\$(jq -r '.hooks.SessionStart[0].hooks[0].command' \"$HK_A/settings.json\")\"; CLAUDE_CONFIG_DIR=\"$HK_A\" ODOO_DEV_HOME=\"$HOOKS_TEST_ROOT/state\" sh -c \"\$cmd\" </dev/null"
 
 # The #803 regression test proper: evaluate the very same command literal on a
 # machine that has only ~/.claude - no CLAUDE_CONFIG_DIR, and the config dir at a
@@ -1219,8 +1161,8 @@ check "sync-claude-hooks publishes the usage-log hook into the shared config dir
   "test -x \"$HK_A/hooks/usage-log-hook.sh\" && cmp -s $USAGE_HOOK \"$HK_A/hooks/usage-log-hook.sh\""
 check "settings.json registers the usage-log hook once per event, PreToolUse only for Skill (#1204)" bash -c \
   "for ev in SessionStart UserPromptExpansion SubagentStart PreToolUse; do [ \"\$(jq --arg e \"\$ev\" '[.hooks[\$e][] | select(.hooks[].command | contains(\"usage-log-hook.sh\"))] | length' \"$HK_A/settings.json\")\" = '1' ] || exit 1; done; jq -e '.hooks.PreToolUse[] | select(.hooks[].command | contains(\"usage-log-hook.sh\")) | select(.matcher == \"Skill\")' \"$HK_A/settings.json\" >/dev/null"
-check "usage-log-hook is silent and exits 0 with USAGE_LOG_DIR unset (#1204)" bash -c \
-  "out=\"\$(echo '{\"hook_event_name\":\"SubagentStart\",\"agent_type\":\"odoo-dev-builder\"}' | env -u USAGE_LOG_DIR $USAGE_HOOK)\"; rc=\$?; [ \$rc -eq 0 ] && [ -z \"\$out\" ]"
+check "usage-log-hook is silent and exits 0 with ODOO_DEV_USAGE_LOG=0 (#1204)" bash -c \
+  "out=\"\$(echo '{\"hook_event_name\":\"SubagentStart\",\"agent_type\":\"odoo-dev-builder\"}' | ODOO_DEV_USAGE_LOG=0 $USAGE_HOOK)\"; rc=\$?; [ \$rc -eq 0 ] && [ -z \"\$out\" ]"
 
 # Fake $CLAUDE_CONFIG_DIR trees: <dir> <installed> <marketplace> then the cache
 # version directories. An "orphan:<v>" argument is a directory Claude Code has
@@ -1320,10 +1262,10 @@ check "the shipped deny list lands whole (#811)" bash -c \
   "[ \"\$(jq '.permissions.deny | length' \"$HK_SEC/settings.json\")\" = \"\$(jq '.permissions.deny | length' /usr/local/share/personal-features/settings-fragment.json)\" ] && jq -e '.permissions.deny | index(\"Bash(pkill*)\")' \"$HK_SEC/settings.json\" >/dev/null"
 check "the shipped env keys land (#811)" bash -c \
   "[ \"\$(jq -r '.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY' \"$HK_SEC/settings.json\")\" = '1' ] && [ \"\$(jq -r '.env.CAVEMAN_DEFAULT_MODE' \"$HK_SEC/settings.json\")\" = 'ultra' ]"
-# ODOO_DEV_STATE_DIR is delivered through containerEnv, not through this fragment;
+# ODOO_DEV_HOME is delivered through containerEnv, not through this fragment;
 # shipping it here too would give one value two owners.
-check "the fragment ships no ODOO_DEV_STATE_DIR (#811)" bash -c \
-  "[ \"\$(jq -r '.env.ODOO_DEV_STATE_DIR // \"absent\"' /usr/local/share/personal-features/settings-fragment.json)\" = 'absent' ]"
+check "the fragment ships no ODOO_DEV_HOME (#811)" bash -c \
+  "[ \"\$(jq -r '.env.ODOO_DEV_HOME // \"absent\"' /usr/local/share/personal-features/settings-fragment.json)\" = 'absent' ]"
 check "the fragment carries no secret-looking key (#811)" bash -c \
   "! grep -qiE '\"[^\"]*(token|secret|password|api[_-]?key)[^\"]*\"[[:space:]]*:' /usr/local/share/personal-features/settings-fragment.json"
 check "the shipped autoMode.environment lands (#811)" bash -c \
@@ -1472,7 +1414,7 @@ check "sync-claude-hooks reports an unreadable settings.json as unreadable, not 
 
 # --- #805: every hook command is resolved, not just the two that broke first ---
 # The feature used to assert exactly two of the ten commands settings.json
-# references - the odoo-sdk console scripts in install.sh (#496) and
+# references - the odoo-dev console scripts in install.sh (#496) and
 # mempalace-recall.sh in mempalace-repair (#744) - each added reactively after
 # the thing it guarded had already broken. Everything else was provisioned on
 # trust, including odoo-api-guard.sh, which exit-127'd 73 times while silently
@@ -1549,12 +1491,12 @@ check "a command it cannot resolve by inspection is reported, not passed silentl
 # execute produces no event AND no signal, so 3,506 events were dropped over
 # three months and the absence of rows looked exactly like a quiet week. The
 # breadcrumb is written by the path that SUCCEEDS (claude-event-hook, only after
-# odoo-sdk exits 0) and compared by a different program at a different time
+# odoo-dev exits 0) and compared by a different program at a different time
 # (sync-claude-hooks), because whatever breaks the hook also stops any counter
 # the hook itself would write. It rides in the #806 provision marker rather than
 # in a breadcrumb of its own - one file holding both facts about this config dir.
 
-# (a) the writing half, driven through the real shim with the odoo-sdk stub.
+# (a) the writing half, driven through the real shim with the odoo-dev stub.
 export HK_HB="$HOOKS_TEST_ROOT/hb"
 mkdir -p "$HK_HB"
 # shellcheck disable=SC2016  # single quotes defer expansion into the check subshell
@@ -1587,12 +1529,12 @@ check "the heartbeat preserves the #806 provenance keys in the same marker" bash
     "$HK_HB2/personal-features-provision.json" >/dev/null
 '
 # The #496 shape, and the reason the breadcrumb cannot be the hook is own failure
-# counter: with no odoo-sdk the shim exits before anything of its own runs, so
+# counter: with no odoo-dev the shim exits before anything of its own runs, so
 # the ONLY observable is that the timestamp stopped moving.
 export HK_HB3="$HOOKS_TEST_ROOT/hb3"
 mkdir -p "$HK_HB3"
 # shellcheck disable=SC2016  # single quotes defer expansion into the check subshell
-check "no heartbeat is recorded when odoo-sdk cannot be run (#496 shape)" bash -c '
+check "no heartbeat is recorded when odoo-dev cannot be run (#496 shape)" bash -c '
   printf "{\"session_id\":\"s1\",\"tool_name\":\"Bash\",\"hook_event_name\":\"PreToolUse\",\"cwd\":\"/tmp\"}" \
     | PATH=/usr/bin:/bin CLAUDE_CONFIG_DIR="$HK_HB3" /usr/local/bin/claude-event-hook PreToolUse
   sleep 1
@@ -2433,8 +2375,6 @@ check "claude-home is chmod 0700 (credentials not world-readable)" bash -c \
   "[ \"\$(stat -c '%a' /usr/local/share/claude-home)\" = '700' ]"
 check "gh-cli-config is chmod 0700 (credentials not world-readable)" bash -c \
   "[ \"\$(stat -c '%a' /usr/local/share/gh-cli-config)\" = '700' ]"
-check "odoo-sdk-config is chmod 0700 (credentials not world-readable)" bash -c \
-  "[ \"\$(stat -c '%a' /usr/local/share/odoo-sdk-config)\" = '700' ]"
 check "coderabbit-config is chmod 0700 (credentials not world-readable)" bash -c \
   "[ \"\$(stat -c '%a' /usr/local/share/coderabbit-config)\" = '700' ]"
 check "coderabbit CLI home dir is chmod 0700 (auth.json not world-readable, #661)" bash -c \
@@ -2479,7 +2419,7 @@ while IFS= read -r _pf_line; do
     PF_STAGED_ROWS=$((PF_STAGED_ROWS + 1))
 done < "$PF_STAGED_MANIFEST"
 check "every staged manifest row carries the 7 columns the source contract fixes" bash -c \
-  "[ $PF_STAGED_BADSHAPE -eq 0 ] && [ $PF_STAGED_ROWS -ge 10 ]"
+  "[ $PF_STAGED_BADSHAPE -eq 0 ] && [ $PF_STAGED_ROWS -ge 8 ]"
 
 # The two rows #974 names, verbatim, so a staged copy that silently lost or
 # rewrote one is a failure rather than a smaller row count.
@@ -2514,7 +2454,7 @@ while IFS="$PF_TAB" read -r _pf_name _pf_src _pf_target _pf_env _pf_val _pf_mode
     fi
 done < "$PF_STAGED_MANIFEST"
 check "every container-provisioned staged row names a target that exists at that row's mode" bash -c \
-  "[ $PF_ROW_MISMATCH -eq 0 ] && [ $PF_ROW_CHECKED -ge 9 ]"
+  "[ $PF_ROW_MISMATCH -eq 0 ] && [ $PF_ROW_CHECKED -ge 8 ]"
 
 check "check-mount-ownership is installed and executable (#974)" bash -c \
   "test -x /usr/local/bin/check-mount-ownership"

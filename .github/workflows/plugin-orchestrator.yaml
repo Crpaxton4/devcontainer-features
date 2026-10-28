@@ -50,6 +50,9 @@ jobs:
         with:
           python-version: "3.13"
 
+      # The helper unit tests import odoo_dev_data and dispatcher from the workspace.
+      - uses: astral-sh/setup-uv@v7
+
       - name: "Install the Claude Code CLI"
         run: |
           npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"

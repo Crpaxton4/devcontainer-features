@@ -3,7 +3,7 @@
 # Executed against the 'on_odoo18_base_image' scenario in scenarios.json, which
 # installs 'personal-features' on top of the official odoo:18 image.
 #
-# odoo_sdk is installed as an isolated uv tool so that system cryptography is
+# odoo_client is installed as an isolated uv tool so that system cryptography is
 # never touched. Checks verify the tool environment directly.
 
 set -e
@@ -16,13 +16,13 @@ check "claude is on PATH and executable" bash -c "test -x \"\$(command -v claude
 check "claude reports a version" claude --version
 check "wrapper injects --ide for default sessions" bash -c "grep -q -- '--ide' \"\$(command -v claude)\""
 
-# odoo_sdk: installed into an isolated tool environment.
-check "odoo_sdk is importable in tool env" \
-    bash -c "/usr/local/share/uv/tools/odoo-sdk/bin/python -c 'import odoo_sdk'"
+# odoo_client: installed into an isolated tool environment.
+check "odoo_client is importable in tool env" \
+    bash -c "/usr/local/share/uv/tools/odoo-dev/bin/python -c 'import odoo_client'"
 
-check "odoo_sdk core API is accessible in tool env" \
-    bash -c "/usr/local/share/uv/tools/odoo-sdk/bin/python -c '
-from odoo_sdk import (
+check "odoo_client core API is accessible in tool env" \
+    bash -c "/usr/local/share/uv/tools/odoo-dev/bin/python -c '
+from odoo_client import (
     OdooClient,
     OdooConnectionSettings,
     OdooExecutor,

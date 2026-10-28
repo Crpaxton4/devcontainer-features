@@ -1,0 +1,533 @@
+"""Tests for the MCP dispatch event wrapper (issue #326).
+
+The ``_event_emitting`` wrapper is the *sole* event producer for the MCP tool
+surface: every successful tool dispatch writes exactly one ``source="agent"``
+event row, exceptions and SEP-2322 input-required ask legs (#664) emit nothing,
+and telemetry failures never break the tool call. These tests drive the wrapper
+through the full registration chain (built by ``OdooMCPServer._add_tool``)
+and unit-test the small emission helpers.
+"""
+
+import asyncio
+import inspect
+import unittest
+from unittest.mock import Mock, patch
+
+from odoo_dev_core import default_registry, telemetry
+from odoo_dev_core.telemetry import READ_TASK_IDS_PAYLOAD_KEY
+from odoo_mcp import server as server_mod
+from odoo_dev_data.events import EventStore
+from ..support import make_event_store
+from ..support import make_service, wire_tools
+
+#: Patch targets for the best-effort git lookups the ``log_event`` command performs
+#: when a caller leaves ``repo``/``branch`` unstated (#509).
+REPO_LABEL = "odoo_dev_data.adapters.git.current_repo_label"
+BRANCH_LABEL = "odoo_dev_core.builtins.log_event.current_branch_label"
+
+
+def _tmp_db() -> EventStore:
+    return make_event_store()
+
+
+def _build_tools(registry, fake_tools):
+    """Run the fake tools through the server chain; return {name: Tool}."""
+    return wire_tools(registry, fake_tools)
+
+
+class TestDispatchEmitsEvent(unittest.TestCase):
+    def test_mutating_tool_with_task_id_emits_one_event(self):
+        db = _tmp_db()
+        registry = make_service(db, Mock())
+
+        def task_note(task_id: int, task_name: str) -> dict:
+            """Fake tool."""
+            return {"task_id": task_id}
+
+        tools = _build_tools(registry, {"task_note": task_note})
+        result = tools["task_note"].fn(task_id=42, task_name="Fix VAT")
+
+        self.assertEqual(result, {"task_id": 42})
+        events = db.get_events()
+        self.assertEqual(len(events), 1)
+        event = events[0]
+        self.assertEqual(event.source, "agent")
+        # Only the tool name is persisted as subject; no argument values.
+        self.assertEqual(event.subject, "task_note")
+        self.assertEqual(event.task_ids, ["42"])
+        # The payload is reconstructable (#626): the tool name, the argument
+        # NAMES (shape, not content -- the task_name value "Fix VAT" is
+        # withheld), a one-line outcome, and the allowlisted identifier fields
+        # lifted from the result. An ATTRIBUTING tool records no read_task_ids:
+        # its id is real attribution and already in ``task_ids``.
+        self.assertEqual(
+            event.payload,
+            {
+                "tool": "task_note",
+                "args": ["task_id", "task_name"],
+                "outcome": "ok",
+                "task_id": 42,
+            },
+        )
+
+    def test_read_tool_records_the_queried_id_without_attributing(self):
+        # #1040: a read tool used to tag its queried id, so one investigation
+        # ``get_task`` minted a derived session on that task and the 0.25 h
+        # min-session floor billed it. The id is now payload evidence only.
+        db = _tmp_db()
+        registry = make_service(db, Mock())
+
+        def get_task(task_id: int) -> dict:
+            """Fake tool."""
+            return {"ok": True}
+
+        tools = _build_tools(registry, {"get_task": get_task})
+        tools["get_task"].fn(task_id=42)
+
+        event = db.get_events()[0]
+        self.assertEqual(event.task_ids, [])
+        self.assertEqual(
+            event.payload,
+            {
+                "tool": "get_task",
+                "args": ["task_id"],
+                "outcome": "ok",
+                READ_TASK_IDS_PAYLOAD_KEY: ["42"],
+            },
+        )
+
+    def test_read_tool_with_an_uncoercible_id_records_nothing(self):
+        # The key is omitted rather than written empty, so a read of a
+        # non-task argument leaves the historical payload shape untouched.
+        db = _tmp_db()
+        registry = make_service(db, Mock())
+
+        def get_task(task_id: str) -> dict:
+            """Fake tool."""
+            return {"ok": True}
+
+        tools = _build_tools(registry, {"get_task": get_task})
+        tools["get_task"].fn(task_id="not-an-id")
+
+        self.assertEqual(
+            db.get_events()[0].payload,
+            {"tool": "get_task", "args": ["task_id"], "outcome": "ok"},
+        )
+
+    def test_tool_without_task_id_and_no_active_run_is_untargeted(self):
+        db = _tmp_db()
+        registry = make_service(db, Mock())
+
+        def ping(message: str) -> str:
+            """Fake tool."""
+            return message
+
+        tools = _build_tools(registry, {"ping": ping})
+        tools["ping"].fn(message="hi")
+
+        events = db.get_events()
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0].task_ids, [])
+        # Subject is the bare tool name; the "message" VALUE is not persisted
+        # (only its name), and a non-dict result lifts no fields.
+        self.assertEqual(events[0].subject, "ping")
+        self.assertEqual(
+            events[0].payload,
+            {"tool": "ping", "args": ["message"], "outcome": "ok"},
+        )
+
+    def test_explicit_task_id_is_attributed(self):
+        db = _tmp_db()
+        registry = make_service(db, Mock())
+
+        def task_note(task_id: int) -> dict:
+            """Fake tool."""
+            return {"ok": True}
+
+        tools = _build_tools(registry, {"task_note": task_note})
+        tools["task_note"].fn(task_id=999)
+
+        self.assertEqual(db.get_events()[0].task_ids, ["999"])
+
+    def test_provenance_is_resolved_not_hardcoded_empty(self):
+        # Regression for #509: this path passed ``repo=""``, so no agent event
+        # could ever be traced to the code that produced it and every derived
+        # session fell back to the repo-less sentinel.
+        db = _tmp_db()
+        registry = make_service(db, Mock())
+
+        def ping() -> str:
+            """Fake tool."""
+            return "pong"
+
+        tools = _build_tools(registry, {"ping": ping})
+        with (
+            patch(REPO_LABEL, return_value="o/r"),
+            patch(BRANCH_LABEL, return_value="feat/kiosk"),
+        ):
+            tools["ping"].fn()
+
+        event = db.get_events()[0]
+        self.assertEqual(event.repo, "o/r")
+        self.assertEqual(event.branch, "feat/kiosk")
+
+    def test_free_text_arg_values_are_not_persisted(self):
+        # Regression for #365: chatter note bodies, questions, and search
+        # queries must never reach the local events store -- only the tool name
+        # (+ task scope) is recorded.
+        db = _tmp_db()
+        registry = make_service(db, Mock())
+        secret = "expired coupons leak PII to the checkout log"
+
+        def task_question(task_id: int, question: str) -> dict:
+            """Fake tool."""
+            return {"ok": True}
+
+        tools = _build_tools(registry, {"task_question": task_question})
+        tools["task_question"].fn(task_id=1234, question=secret)
+
+        events = db.get_events()
+        self.assertEqual(len(events), 1)
+        event = events[0]
+        self.assertEqual(event.subject, "task_question")
+        # The payload carries argument NAMES only -- the question body never
+        # reaches local persistence (#365), even in the enriched shape (#626).
+        self.assertEqual(
+            event.payload,
+            {
+                "tool": "task_question",
+                "args": ["question", "task_id"],
+                "outcome": "ok",
+            },
+        )
+        self.assertEqual(event.task_ids, ["1234"])
+        self.assertNotIn(secret, event.subject)
+        self.assertNotIn(secret, repr(event.payload))
+
+    def test_raising_tool_emits_no_event(self):
+        db = _tmp_db()
+        registry = make_service(db, Mock())
+
+        def boom(task_id: int) -> dict:
+            """Fake tool."""
+            raise ValueError("nope")
+
+        tools = _build_tools(registry, {"boom": boom})
+        result = tools["boom"].fn(task_id=1)
+
+        # The boundary formats the error; the event wrapper (innermost) never
+        # reached its emit because the exception propagated first.
+        self.assertEqual(result, {"error": {"type": "ValueError", "message": "nope"}})
+        self.assertEqual(db.get_events(), [])
+
+    def test_async_tool_emits_event(self):
+        db = _tmp_db()
+        registry = make_service(db, Mock())
+
+        async def task_note(task_id: int, note: str) -> dict:
+            """Fake tool."""
+            return {"ok": True}
+
+        tools = _build_tools(registry, {"task_note": task_note})
+        result = asyncio.run(tools["task_note"].fn(task_id=7, note="working"))
+
+        self.assertEqual(result, {"ok": True})
+        events = db.get_events()
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0].task_ids, ["7"])
+        # The note body ("working") is not persisted -- subject is the tool name
+        # and the payload carries only names/outcome ("ok" is unlisted, so no
+        # field is lifted).
+        self.assertEqual(events[0].subject, "task_note")
+        self.assertEqual(
+            events[0].payload,
+            {"tool": "task_note", "args": ["note", "task_id"], "outcome": "ok"},
+        )
+
+    def test_input_required_leg_emits_no_event(self):
+        # #664: a SEP-2322 input-required first leg is an ask, not an outcome —
+        # no agent event may be recorded for it (the continuation invocation
+        # emits the dispatch's single event), and the ask must flow through the
+        # wrapper chain to the wire unchanged.
+        from mcp.types import (
+            CreateMessageRequest,
+            CreateMessageRequestParams,
+            InputRequiredResult,
+            SamplingMessage,
+            TextContent,
+        )
+
+        db = _tmp_db()
+        registry = make_service(db, Mock())
+        ask = InputRequiredResult(
+            input_requests={
+                "branch_description": CreateMessageRequest(
+                    params=CreateMessageRequestParams(
+                        messages=[
+                            SamplingMessage(
+                                role="user",
+                                content=TextContent(type="text", text="prompt"),
+                            )
+                        ],
+                        max_tokens=30,
+                    )
+                )
+            }
+        )
+
+        async def start_task(task_id: int) -> dict:
+            """Fake tool."""
+            return ask
+
+        tools = _build_tools(registry, {"start_task": start_task})
+        result = asyncio.run(tools["start_task"].fn(task_id=10))
+
+        self.assertIs(result, ask)
+        self.assertEqual(db.get_events(), [])
+
+    def test_emit_failure_does_not_break_tool(self):
+        class BoomState:
+            def add_event(self, event):
+                raise RuntimeError("db down")
+
+        registry = make_service(BoomState(), Mock())
+
+        def do_thing(task_id: int) -> dict:
+            """Fake tool."""
+            return {"ok": task_id}
+
+        tools = _build_tools(registry, {"do_thing": do_thing})
+        # A raising state store must not surface to the caller.
+        self.assertEqual(tools["do_thing"].fn(task_id=3), {"ok": 3})
+
+    def test_signature_preserved_through_chain(self):
+        db = _tmp_db()
+        registry = make_service(db, Mock())
+
+        def do_thing(task_id: int, task_name: str = "x") -> dict:
+            """Fake tool."""
+            return {}
+
+        tools = _build_tools(registry, {"do_thing": do_thing})
+        self.assertEqual(
+            inspect.signature(tools["do_thing"].fn),
+            inspect.signature(do_thing),
+        )
+
+
+class TestPayloadEnrichment(unittest.TestCase):
+    """The #626 payload shape: reconstructable identifiers, never free text."""
+
+    def test_identifier_fields_lifted_from_result(self):
+        db = _tmp_db()
+        registry = make_service(db, Mock())
+
+        def create_task(task_id: int) -> dict:
+            """Fake tool."""
+            return {
+                "run_id": 12,
+                "elapsed_hours": 0.5,
+                "branch_name": "4242#fix-vat",
+                "pr_url": "https://github.com/o/r/pull/9",
+                "test_result": "passed",
+                "chatter": "free text that must NOT be lifted",
+            }
+
+        tools = _build_tools(registry, {"create_task": create_task})
+        tools["create_task"].fn(task_id=4242)
+
+        payload = db.get_events()[0].payload
+        self.assertEqual(payload["tool"], "create_task")
+        self.assertEqual(payload["args"], ["task_id"])
+        self.assertEqual(payload["outcome"], "ok")
+        self.assertEqual(payload["run_id"], 12)
+        self.assertEqual(payload["elapsed_hours"], 0.5)
+        self.assertEqual(payload["branch_name"], "4242#fix-vat")
+        self.assertEqual(payload["pr_url"], "https://github.com/o/r/pull/9")
+        self.assertEqual(payload["test_result"], "passed")
+        # Unlisted result keys (free text) never reach the payload.
+        self.assertNotIn("chatter", payload)
+
+    def test_none_and_non_scalar_result_fields_are_omitted(self):
+        db = _tmp_db()
+        registry = make_service(db, Mock())
+
+        def do_thing(task_id: int) -> dict:
+            """Fake tool."""
+            return {
+                "run_id": None,
+                "pr_url": ["not", "a", "scalar"],
+                "state": "RUNNING",
+            }
+
+        tools = _build_tools(registry, {"do_thing": do_thing})
+        tools["do_thing"].fn(task_id=1)
+
+        payload = db.get_events()[0].payload
+        self.assertNotIn("run_id", payload)
+        self.assertNotIn("pr_url", payload)
+        self.assertEqual(payload["state"], "RUNNING")
+
+    def test_structured_error_result_records_error_outcome(self):
+        # The wrapper only fires on a successful dispatch, but a tool handing
+        # back a structured {"error": ...} payload is an outcome worth auditing.
+        db = _tmp_db()
+        registry = make_service(db, Mock())
+
+        def do_thing(task_id: int) -> dict:
+            """Fake tool."""
+            return {"error": {"type": "ValueError", "message": "bad input"}}
+
+        tools = _build_tools(registry, {"do_thing": do_thing})
+        tools["do_thing"].fn(task_id=1)
+
+        self.assertEqual(db.get_events()[0].payload["outcome"], "error: bad input")
+
+    def test_outcome_line_variants(self):
+        self.assertEqual(telemetry.outcome_line({"ok": True}), "ok")
+        self.assertEqual(telemetry.outcome_line("plain string"), "ok")
+        self.assertEqual(telemetry.outcome_line(None), "ok")
+        self.assertEqual(telemetry.outcome_line({"error": "boom"}), "error: boom")
+        self.assertEqual(telemetry.outcome_line({"error": {}}), "error")
+
+    def test_result_payload_fields_ignores_non_dict(self):
+        self.assertEqual(telemetry.result_payload_fields(None), {})
+        self.assertEqual(telemetry.result_payload_fields([1, 2]), {})
+        self.assertEqual(telemetry.result_payload_fields("x"), {})
+
+
+#: Every built-in command that must NOT attribute its event to the id it was
+#: handed (#1040). Hand-maintained on purpose and asserted to be the exact
+#: complement of :data:`ATTRIBUTING_TOOLS` below, so adding a command forces a
+#: deliberate classification instead of silently inheriting a default.
+#:
+#: Most are plain reads. Three write, and are here anyway because what they write
+#: IS the billing record, so attributing them would bill the act of correcting a
+#: task's time: ``assign_event`` (the retag write), ``normalize_timesheets``, and
+#: ``resync`` (which ingests external history rather than doing work).
+#: ``get_employee_id`` only writes a local id cache, and ``log_event`` and
+#: ``upload`` are CLI-only plumbing.
+_READ_TOOLS = frozenset(
+    {
+        "assign_event",
+        "get_activities",
+        "get_employee_id",
+        "get_mail_status",
+        "get_models",
+        "get_task",
+        "get_task_attachments",
+        "get_task_chatter",
+        "get_tasks",
+        "get_todo",
+        "get_uid",
+        "log_event",
+        "normalize_timesheets",
+        "optimize_sessions",
+        "query_sessions",
+        "read_attachment",
+        "read_knowledge_article",
+        "resync",
+        "search_activity_types",
+        "search_chatter",
+        "search_count",
+        "search_knowledge_articles",
+        "search_projects",
+        "search_tasks",
+        "task_aging",
+        "task_list",
+        "timesheet_summary",
+        "unbilled_hours",
+        "unlogged_time_report",
+        "upload",
+    }
+)
+
+
+class TestAttributingToolSet(unittest.TestCase):
+    """Every built-in is classified exactly once: attributing OR read (#1040).
+
+    This is the pin the fix rests on. The dispatch emitter defaults an unlisted
+    tool to NON-attributing, which is the safe side for billing but a silent one:
+    a new mutating command would stop attributing and nobody would notice. So the
+    partition is asserted over the live registry — adding a command fails this
+    test until its side is stated.
+    """
+
+    def test_sets_are_disjoint(self):
+        self.assertEqual(telemetry.ATTRIBUTING_TOOLS & _READ_TOOLS, frozenset())
+
+    def test_every_builtin_is_classified_exactly_once(self):
+        classified = telemetry.ATTRIBUTING_TOOLS | _READ_TOOLS
+        self.assertEqual(set(default_registry().ids()), classified)
+
+    def test_no_classified_name_is_unknown_to_the_registry(self):
+        # Catches a typo or a renamed command on either side of the partition.
+        for name in sorted(telemetry.ATTRIBUTING_TOOLS | _READ_TOOLS):
+            self.assertIn(name, default_registry().ids(), name)
+
+    def test_the_tools_the_issue_names_do_not_attribute(self):
+        # The exact tools #1040 measured phantom sessions from.
+        for name in ("get_task", "get_task_chatter", "get_tasks", "search_tasks"):
+            self.assertNotIn(name, telemetry.ATTRIBUTING_TOOLS, name)
+
+    def test_the_session_mutators_do_attribute(self):
+        for name in ("task_note", "task_question", "create_task"):
+            self.assertIn(name, telemetry.ATTRIBUTING_TOOLS, name)
+
+
+class TestEventHelpers(unittest.TestCase):
+    #: One attributing and one read tool, both of which really take a ``task_id``.
+    MUTATING = "task_note"
+    READING = "get_task"
+
+    def test_task_ids_coercible_int(self):
+        self.assertEqual(telemetry.event_task_ids(self.MUTATING, {"task_id": 5}), ["5"])
+
+    def test_task_ids_coercible_str(self):
+        self.assertEqual(
+            telemetry.event_task_ids(self.MUTATING, {"task_id": "5"}), ["5"]
+        )
+
+    def test_task_ids_absent(self):
+        self.assertEqual(telemetry.event_task_ids(self.MUTATING, {}), [])
+
+    def test_task_ids_none(self):
+        self.assertEqual(telemetry.event_task_ids(self.MUTATING, {"task_id": None}), [])
+
+    def test_task_ids_non_coercible(self):
+        self.assertEqual(
+            telemetry.event_task_ids(self.MUTATING, {"task_id": "abc"}), []
+        )
+
+    def test_read_tool_yields_no_attribution_hint(self):
+        self.assertEqual(telemetry.event_task_ids(self.READING, {"task_id": 5}), [])
+
+    def test_unknown_tool_yields_no_attribution_hint(self):
+        # The default is NON-attributing: a tool nobody classified must not
+        # silently start billing the id it was handed (#1040).
+        self.assertEqual(telemetry.event_task_ids("brand_new", {"task_id": 5}), [])
+
+    def test_queried_ids_are_the_exact_complement(self):
+        self.assertEqual(
+            telemetry.queried_task_ids(self.READING, {"task_id": 5}), ["5"]
+        )
+        self.assertEqual(telemetry.queried_task_ids(self.MUTATING, {"task_id": 5}), [])
+
+    def test_queried_ids_drop_a_non_task_value(self):
+        for value in (None, "abc", object()):
+            self.assertEqual(
+                telemetry.queried_task_ids(self.READING, {"task_id": value}), []
+            )
+
+    def test_bound_arguments_excludes_ctx(self):
+        def sample(task_id, ctx=None):
+            return None
+
+        bound = server_mod._bound_arguments(
+            inspect.signature(sample), (5,), {"ctx": object()}
+        )
+        self.assertEqual(bound, {"task_id": 5})
+
+
+if __name__ == "__main__":
+    unittest.main()

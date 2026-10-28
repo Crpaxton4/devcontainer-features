@@ -21,10 +21,10 @@ jobs:
 
       - name: "Bundle Python libraries into feature"
         run: |
-          uv build --directory libraries/odoo_sdk
-          cp libraries/odoo_sdk/dist/*.whl devcontainer-features/src/personal-features/
-          uv build --directory libraries/usage_log
-          cp libraries/usage_log/dist/*.whl devcontainer-features/src/personal-features/
+          for pkg in odoo_client odoo_dev_data odoo_dev_core odoo_cli odoo_mcp odoo_tui usage_log; do
+            uv build --package "$pkg" --out-dir dist
+          done
+          cp dist/*.whl devcontainer-features/src/personal-features/
 
       - name: "Publish Features"
         uses: devcontainers/action@v1

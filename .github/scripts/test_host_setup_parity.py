@@ -4,7 +4,7 @@ A devcontainer bind mount whose source doesn't exist on the host is a hard
 container-create failure, so ``setup.sh`` / ``setup.ps1`` must create *every*
 mount source the Feature declares. That list used to be duplicated in four
 places (the Feature JSON, ``setup.sh``, and ``.github/workflows/test.yaml``
-twice) and predictably drifted: ``~/.config/odoo_sdk`` was a mount source that
+twice) and predictably drifted: ``~/.config/odoo_client`` was a mount source that
 ``setup.sh`` never created.
 
 ``persisted-paths.tsv`` is now the single source of truth: ``setup.sh`` reads it
@@ -26,7 +26,7 @@ Linux test:
   materialises a missing single-file mount source as a directory and then fails
   the mount.
 
-Like the other helpers here this is CI-only and stdlib-only: no ``odoo_sdk``, no
+Like the other helpers here this is CI-only and stdlib-only: no ``odoo_client``, no
 third-party YAML/JSON5 parser.
 
 ``TestSetupShOwnership`` is the one group here that *runs* ``setup.sh`` rather
@@ -188,9 +188,7 @@ class TestHostSetupParity(unittest.TestCase):
         # an empty container-created dir. The loop can't statically be executed
         # here, so assert install.sh's loop consumes the provision column and
         # short-circuits host rows.
-        rows = checker.load_manifest()
-        host_rows = [r for r in rows if r["provision"] == "host"]
-        self.assertTrue(host_rows, "expected at least one host-provisioned row")
+        # No row is host-provisioned today; the semantics stay supported.
         body = INSTALL_SH.read_text()
         self.assertIn("_provision", body)
         self.assertRegex(
@@ -199,18 +197,6 @@ class TestHostSetupParity(unittest.TestCase):
             "install.sh must skip provision=host rows so the container never "
             "creates the host-provisioned target",
         )
-
-    def test_setup_scripts_initialize_the_host_provisioned_database(self):
-        # The host-provisioned tracker DB schema is created by the init script,
-        # not the container (#369); both host setup scripts must invoke it.
-        for script in (SETUP_SH, SETUP_PS1):
-            with self.subTest(script=script.name):
-                self.assertIn(
-                    "init_tracker_db.py",
-                    script.read_text(),
-                    f"{script.name} must initialize the host-provisioned tracker "
-                    f"database via scripts/init_tracker_db.py",
-                )
 
     def test_setup_scripts_do_not_create_history_files(self):
         # Both scripts used to `touch ~/.bash_history` (now a directory mount).

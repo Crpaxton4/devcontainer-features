@@ -18,13 +18,13 @@ check "claude is on PATH and executable" bash -c "test -x \"\$(command -v claude
 check "claude reports a version" claude --version
 check "wrapper injects --ide for default sessions" bash -c "grep -q -- '--ide' \"\$(command -v claude)\""
 
-# odoo_sdk: installed into an isolated tool environment.
-check "odoo_sdk is importable in tool env" \
-    bash -c "/usr/local/share/uv/tools/odoo-sdk/bin/python -c 'import odoo_sdk'"
+# odoo_client: installed into an isolated tool environment.
+check "odoo_client is importable in tool env" \
+    bash -c "/usr/local/share/uv/tools/odoo-dev/bin/python -c 'import odoo_client'"
 
-check "odoo_sdk core API is accessible in tool env" \
-    bash -c "/usr/local/share/uv/tools/odoo-sdk/bin/python -c '
-from odoo_sdk import (
+check "odoo_client core API is accessible in tool env" \
+    bash -c "/usr/local/share/uv/tools/odoo-dev/bin/python -c '
+from odoo_client import (
     OdooClient,
     OdooConnectionSettings,
     OdooExecutor,
@@ -34,7 +34,7 @@ from odoo_sdk import (
 )
 '"
 
-# TOML config discovery guard. These checks used to force odoo_sdk's pre-3.11
+# TOML config discovery guard. These checks used to force odoo_client's pre-3.11
 # tomli fallback, because the tool env bound odoo:17's system CPython 3.10
 # (no stdlib `tomllib`). Since #674 the env no longer binds the base image's
 # interpreter at all - install.sh pins a uv-managed CPython 3.11 so the
@@ -56,14 +56,14 @@ session_gap_mins = 45
 TOML
 
 check "tool env runs the pinned uv-managed CPython 3.11, not the system 3.10 (#674)" \
-    bash -c "/usr/local/share/uv/tools/odoo-sdk/bin/python -c '
+    bash -c "/usr/local/share/uv/tools/odoo-dev/bin/python -c '
 import sys
 assert sys.version_info[:2] == (3, 11), sys.version
 '"
 
 check "LocalConfig parses config.toml in the tool env" \
-    bash -c "ODOO_SDK_CONFIG=\"$ODOO17_CONFIG_DIR\" /usr/local/share/uv/tools/odoo-sdk/bin/python -c '
-from odoo_sdk.state.config import LocalConfig
+    bash -c "ODOO_DEV_HOME=\"$ODOO17_CONFIG_DIR\" /usr/local/share/uv/tools/odoo-dev/bin/python -c '
+from odoo_dev_data.config import LocalConfig
 
 config = LocalConfig.load()
 assert config.connection[\"url\"] == \"https://toml.example.com\", config.connection
@@ -72,11 +72,11 @@ assert config.session_gap_mins == 45, config.session_gap_mins
 '"
 
 check "connection settings resolve from config.toml" \
-    bash -c "ODOO_SDK_CONFIG=\"$ODOO17_CONFIG_DIR\" /usr/local/share/uv/tools/odoo-sdk/bin/python -c '
-from odoo_sdk.state.config import LocalConfig
+    bash -c "ODOO_DEV_HOME=\"$ODOO17_CONFIG_DIR\" /usr/local/share/uv/tools/odoo-dev/bin/python -c '
+from odoo_dev_data.config import LocalConfig, connection_values
 
-settings = LocalConfig.load().connection_settings()
-assert settings.username == \"toml-user\", settings
+values = connection_values(LocalConfig.load())
+assert values.username == \"toml-user\", values
 '"
 
 # System OpenSSL regression guard: this is the critical check for odoo:17.

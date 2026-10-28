@@ -60,7 +60,8 @@ for code in $codes; do
 done
 
 gate "helper unit tests"
-if python3 -m unittest discover -s "$ROOT/scripts/tests" -t "$ROOT/scripts/tests"; then ok "unittest"; else bad "unittest"; fi
+# orchestrator.py imports odoo_dev_data and dispatcher, so the tests run in the workspace environment.
+if uv run --project "$ROOT/../.." --package dispatcher python -m unittest discover -s "$ROOT/scripts/tests" -t "$ROOT/scripts/tests"; then ok "unittest"; else bad "unittest"; fi
 
 echo
 if [ "$fails" -eq 0 ]; then echo "VERDICT: all gates passed"; else echo "VERDICT: $fails gate(s) failed"; fi

@@ -2,21 +2,21 @@
 # check-tool-contract.sh — every tool name the plugin references must exist.
 #
 # The plugin's skills, agents, commands, and hooks talk about the odoo-mcp/
-# odoo-sdk command surface by name. A rename or removal in the SDK does not
+# odoo-dev command surface by name. A rename or removal in the suite does not
 # break anything loudly here — the text keeps naming a tool that no longer
 # exists, and an agent following it discovers that mid-task. This gate makes
 # the reference itself the contract: every name the plugin tree mentions must
-# be on the surface `odoo-sdk cmd --list --json` actually serves.
+# be on the surface `odoo-dev cmd --list --json` actually serves.
 #
 # WHAT COUNTS AS A REFERENCE (the matching decision, kept conservative):
 #   1. `mcp__odoo-mcp__<name>`   — a fully qualified MCP tool id.
-#   2. `odoo-sdk cmd <name>`     — a CLI dispatch of a registry command
+#   2. `odoo-dev cmd <name>`     — a CLI dispatch of a registry command
 #                                  (flags like --list start with '-' and
 #                                  never match the [a-z_]+ name).
 #   3. Bare names ONLY in the two forms the plugin already uses when it names
 #      a tool without the mcp__ prefix:
-#         odoo-mcp `<name>`      (prefix form,  e.g. odoo-mcp `start_task`)
-#         `<name>` tool          (suffix form,  e.g. the `start_task` tool)
+#         odoo-mcp `<name>`      (prefix form,  e.g. odoo-mcp `task_note`)
+#         `<name>` tool          (suffix form,  e.g. the `task_note` tool)
 #      Generic backticked snake_case is deliberately NOT matched: the tree is
 #      full of field names, JSON keys, and gate vocabulary (`default_branch`,
 #      `view_mode`, `tours_skipped`, ...) that would drown the gate in false
@@ -28,24 +28,15 @@
 #   1. --surface-file <path>     — one name per line ('#' comments allowed);
 #                                  how the offline fixture tests inject a
 #                                  known surface.
-#   2. odoo-sdk cmd --list --json — the real installed CLI.
-#   3. python3 -c "from odoo_sdk.commands.builtin import BUILTIN_COMMANDS"
-#                                — the exact mapping register_builtins() puts
-#                                  on the registry `cmd --list` enumerates,
-#                                  for an install without the console script.
+#   2. odoo-dev cmd --list --json — the installed CLI, read at run time. The
+#                                  plugin carries no list of ids of its own.
 # None available is exit 2 (the gate could not run), never a silent pass.
 #
-# A source is used only when it actually WORKS, not when it merely looks
-# present (#775). `command -v odoo-sdk` proves a file exists under that name
-# and nothing more: git worktrees do not get their own .venv, so every
-# concurrent worker resolves one shared console script that can be stale,
-# half-rewritten, or built from a different SDK version than the checkout.
-# Such a script resolves on PATH and then dies on import — or parses its own
-# arguments and rejects `cmd` outright. Under `set -euo pipefail` (below) that
-# killed the gate outright, since `pipefail` propagates the crash out of the
-# `odoo-sdk cmd --list --json | python3` pipeline. So source 2 is probed with
-# `odoo-sdk --help` first and its failure drops to source 3 instead of
-# aborting the run.
+# The CLI is used only when it actually WORKS, not when it merely looks
+# present (#775). `command -v odoo-dev` proves a file exists under that name
+# and nothing more: a stale console script resolves on PATH and then dies on
+# import, which `set -o pipefail` would propagate out of the gate. So the CLI
+# is probed with `odoo-dev --version` first, and a failure ends in exit 2.
 #
 # Scanned: skills/ agents/ commands/ hooks/ scripts/ under the plugin root.
 # Excluded: scripts/tests/ (fixtures reference unknown names on purpose) and
@@ -103,7 +94,7 @@ extract() {
 REFS="$(
   {
     extract 'mcp__odoo-mcp__[a-z_]+'      's/^mcp__odoo-mcp__//'
-    extract 'odoo-sdk cmd [a-z_]+'        's/^odoo-sdk cmd //'
+    extract 'odoo-dev cmd [a-z_]+'        's/^odoo-dev cmd //'
     extract 'odoo-mcp `[a-z_]+`'          's/^odoo-mcp `//; s/`$//'
     extract '`[a-z_]+` tool'              's/^`//; s/` tool$//'
   } | LC_ALL=C sort -u
@@ -117,17 +108,10 @@ fi
 # --- the actual surface -----------------------------------------------------------
 
 surface_via_cli() {
-  odoo-sdk cmd --list --json | python3 -c '
+  odoo-dev cmd --list --json | python3 -c '
 import json, sys
 for entry in json.load(sys.stdin):
     print(entry["name"])
-'
-}
-
-surface_via_module() {
-  python3 -c '
-from odoo_sdk.commands.builtin import BUILTIN_COMMANDS
-print("\n".join(sorted(BUILTIN_COMMANDS)))
 '
 }
 
@@ -152,26 +136,20 @@ if [ -n "$SURFACE_FILE" ]; then
   SURFACE="$(grep -vE '^[[:space:]]*(#|$)' "$SURFACE_FILE" | LC_ALL=C sort -u)"
 else
   # Source 2 — the installed console script, gated on it actually running.
-  if command -v odoo-sdk >/dev/null 2>&1; then
-    if odoo-sdk --help >/dev/null 2>&1; then
-      resolve_surface "odoo-sdk cmd --list --json" surface_via_cli || SURFACE=""
+  if command -v odoo-dev >/dev/null 2>&1; then
+    if odoo-dev --version >/dev/null 2>&1; then
+      resolve_surface "odoo-dev cmd --list --json" surface_via_cli || SURFACE=""
     else
-      echo "tool contract: odoo-sdk is on PATH but 'odoo-sdk --help' does not run (stale or broken console script) — falling through to the next source" >&2
+      echo "tool contract: odoo-dev is on PATH but 'odoo-dev --version' does not run (stale or broken console script)" >&2
     fi
-  fi
-
-  # Source 3 — the builtin mapping, for an install with no console script (or
-  # one that source 2 just rejected).
-  if [ -z "$SURFACE" ] && python3 -c 'import odoo_sdk' >/dev/null 2>&1; then
-    resolve_surface "odoo_sdk.commands.builtin.BUILTIN_COMMANDS" surface_via_module || SURFACE=""
   fi
 
   if [ -z "$SURFACE" ]; then
     cat >&2 <<'MSG'
-tool contract: cannot resolve the command surface — odoo-sdk is not on PATH
-(or does not run) and odoo_sdk is not importable. Install the SDK first:
+tool contract: cannot resolve the command surface — odoo-dev is not on PATH
+(or does not run). Install the suite first:
 
-  python3 -m pip install ./libraries/odoo_sdk
+  uv sync --all-packages
 
 or pass an explicit listing with --surface-file <path>.
 MSG
@@ -197,7 +175,7 @@ if [ -n "$unknown" ]; then
   cat >&2 <<'MSG'
 
 Every name above is referenced by a plugin file but absent from
-`odoo-sdk cmd --list --json`. Either the tool was renamed/removed in the SDK
+`odoo-dev cmd --list --json`. Either the tool was renamed/removed in the suite
 (fix the plugin text to the current name) or the reference has a typo.
 MSG
   exit 1

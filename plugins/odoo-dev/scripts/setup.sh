@@ -8,7 +8,7 @@
 # Why it exists: a fresh machine or a rebuilt container used to fail late and
 # cryptically. The review agent finds no `coderabbit` on PATH and comes back with
 # a review that never ran, tours silently skip because no browser is present, and
-# repo-map.sh reads a state dir nobody ever created. Every one of those is knowable up front.
+# the odoo-dev CLI is missing or its state dir was never set up. Every one of those is knowable up front.
 #
 # It NEVER performs an interactive login itself. Device-flow and browser auth
 # cannot be driven from a script without hanging, so this script detects what is
@@ -26,7 +26,7 @@
 #            status`, `coderabbit auth status` — because that is the only way to
 #            answer the question, and those CLIs write their own machine-id,
 #            device-id and log files under HOME when asked. Measured on a fresh
-#            HOME: 8 files, none of them ours. Nothing under ODOO_DEV_STATE_DIR
+#            HOME: 8 files, none of them ours. Nothing under ODOO_DEV_HOME
 #            and nothing in the plugin tree is touched.
 #   --yes    also take the one heavy unattended step: fetch the headless browser
 #            (~100 MB, network). Without it the browser is left as a manual step,
@@ -65,8 +65,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLUGIN_ROOT="$(cd "$HERE/.." && pwd)"
 PREFLIGHT="$PLUGIN_ROOT/skills/odoo-task-env/scripts/preflight.sh"
 BROWSER_ENSURE="$PLUGIN_ROOT/skills/odoo-test-run/scripts/browser-ensure.sh"
-BOOTSTRAP="$HERE/bootstrap-state.sh"
-STATE_DIR="$("$HERE/state-dir.sh")"   # the one definition of the state dir (#884)
+STATE_DIR="$("$HERE/state-dir.sh")"   # the one definition of the state dir
 BOUND_S="${SETUP_TIMEOUT_S:-20}"
 PREFLIGHT_S="${SETUP_PREFLIGHT_TIMEOUT_S:-90}"
 BROWSER_INSTALL_S="${SETUP_BROWSER_TIMEOUT_S:-600}"
@@ -220,28 +219,14 @@ fi
 # takes from the [model_ids] section of its config rather than by reading
 # ir.model (#444, #686). Ship without the project.task entry and the default call
 # — schedule_activity with only res_id — fails at the END of a task, which is the
-# worst possible moment to discover a config gap. Read-only, and read the way the
-# SDK reads it: $ODOO_SDK_CONFIG (file or directory), then ./.odoo_sdk.*, then
-# ~/.config/odoo_sdk. ODOO_MODEL_IDS counts too — it is the documented override.
-MODEL_IDS_STEP="odoo-sdk cmd get_models --args '{\"persist\": [\"project.task\"]}'   # writes the id into [model_ids]"
+# worst possible moment to discover a config gap. Read-only, and read where the
+# suite reads it: $ODOO_DEV_HOME/config.toml (state-dir.sh). ODOO_MODEL_IDS counts
+# too — it is the documented override.
+MODEL_IDS_STEP="odoo-dev cmd get_models --args '{\"persist\": [\"project.task\"]}'   # writes the id into [model_ids]"
 
 sdk_config_path() {
-  local candidate="${ODOO_SDK_CONFIG:-}" f
-  if [ -n "$candidate" ]; then
-    if [ -d "$candidate" ]; then
-      for f in config.toml config.ini; do
-        [ -f "$candidate/$f" ] && { printf '%s' "$candidate/$f"; return 0; }
-      done
-      return 1
-    fi
-    [ -f "$candidate" ] && { printf '%s' "$candidate"; return 0; }
-    return 1
-  fi
-  for f in ./.odoo_sdk.toml ./.odoo_sdk.ini \
-           "$HOME/.config/odoo_sdk/config.toml" "$HOME/.config/odoo_sdk/config.ini"; do
-    [ -f "$f" ] && { printf '%s' "$f"; return 0; }
-  done
-  return 1
+  [ -f "$STATE_DIR/config.toml" ] || return 1
+  printf '%s' "$STATE_DIR/config.toml"
 }
 
 # has_project_task_id <config file> — every spelling the SDK loader accepts: a
@@ -279,7 +264,7 @@ sdk_config="$(sdk_config_path || true)"
 if [ -n "$model_ids_state" ]; then
   pass sdk-model-ids "project.task supplied by ODOO_MODEL_IDS"
 elif [ -z "$sdk_config" ]; then
-  fail sdk-model-ids "no Odoo SDK config file found (\$ODOO_SDK_CONFIG, ./.odoo_sdk.*, ~/.config/odoo_sdk) — schedule_activity has nowhere to read the project.task ir.model id from" \
+  fail sdk-model-ids "no config.toml in $STATE_DIR — schedule_activity has nowhere to read the project.task ir.model id from" \
     "$MODEL_IDS_STEP"
 elif has_project_task_id "$sdk_config"; then
   pass sdk-model-ids "[model_ids] project.task in $sdk_config"
@@ -289,23 +274,25 @@ else
 fi
 
 # --- state dir ---------------------------------------------------------------------
-# Lives outside the plugin tree, so a fresh machine or a skipped bootstrap leaves
-# it missing and repo-map.sh reports a bogus "project unmapped" from a file that
-# was never there. bootstrap-state.sh is idempotent; it is called, never reimplemented.
-if [ -f "$STATE_DIR/repo-map.json" ]; then
+# Lives outside the plugin tree. This script never creates it: the odoo-dev CLI
+# creates the directory on first use, and `odoo-dev doctor --migrate` sets it up
+# once on the host. The repo map inside is created by the first `repo-map set`.
+if [ -d "$STATE_DIR" ]; then
   pass state-dir "$STATE_DIR"
-elif [ "$CHECK" -eq 1 ]; then
-  fail state-dir "$STATE_DIR/repo-map.json is absent" "$BOOTSTRAP"
-elif ! have node; then
-  fail state-dir "$STATE_DIR/repo-map.json is absent, and bootstrap-state.sh needs node" "$BOOTSTRAP"
 else
-  boot_out="$(bounded "$BOUND_S" bash "$BOOTSTRAP" 2>/dev/null | tail -1)"
-  if [ -f "$STATE_DIR/repo-map.json" ]; then
-    pass state-dir "$STATE_DIR"
-    case "$boot_out" in *'"created":[]'*) ;; *) installed+=("state-dir") ;; esac
-  else
-    fail state-dir "bootstrap-state.sh did not produce $STATE_DIR/repo-map.json" "$BOOTSTRAP"
-  fi
+  fail state-dir "$STATE_DIR does not exist" "run \`odoo-dev doctor --migrate\` once on the host"
+fi
+
+# --- the odoo-dev CLI ----------------------------------------------------------------
+# The repo-map scripts are wrappers over it.
+odoo_dev_version="$(bounded "$BOUND_S" odoo-dev --version 2>/dev/null || true)"
+odoo_dev_version="${odoo_dev_version#odoo-dev }"
+# requires.json: odoo-dev >=9
+if [ "${odoo_dev_version%%.*}" -ge 9 ] 2>/dev/null; then
+  pass odoo-dev "$odoo_dev_version"
+else
+  fail odoo-dev "odoo-dev ${odoo_dev_version:-is not on PATH}; version 9 or newer is required" \
+    "install the odoo-dev CLI, version 9 or newer"
 fi
 
 # --- preflight: the context answer, and the readiness pass ---------------------------

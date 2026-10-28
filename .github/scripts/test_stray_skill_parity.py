@@ -28,7 +28,7 @@ the strays on a real machine (``ingest``, ``lint``, ``llm-wiki-workspace``,
 ``process``, ``query``) are the *user's*, not the feature's. Neither list may
 ever acquire one, because the deleter's remedy is ``rm -rf``.
 
-Like the other helpers here this is CI-only and stdlib-only: no ``odoo_sdk``
+Like the other helpers here this is CI-only and stdlib-only: no ``odoo_client``
 import, no third-party parser - the lists are read out of the shell and Python
 sources as text.
 """

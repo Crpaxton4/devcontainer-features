@@ -1,6 +1,8 @@
 # Orchestrator stack
 
-A compose project (`odoo-orchestrator`) that runs the dispatcher in a container.
+A compose project (`odoo-orchestrator`) that runs on the host. It has three
+services: `dispatcher` (`libraries/dispatcher`), `webui` (`apps/webui`) and
+`orchestrator` (the helper). `Dockerfile` builds the `dispatcher` and `webui` targets.
 Start it through `plugins/odoo-orchestrator/scripts/dispatch.sh`.
 
 ## Host prerequisites
@@ -21,13 +23,11 @@ yourself when you call `docker compose` directly.
 Required: `HOME`, `SECOND_BRAIN_DIR`, `DISPATCH_REPOS_DIR`, `DISPATCH_CONFIG_ROOT`. An unset one stops compose with a message.
 
 Optional, passed through when set: `DISPATCH_CLAUDE_HOME` (default `~/.claude`),
-`ODOO_DISPATCH_STATE_DIR` (default `$XDG_STATE_HOME` or `~/.local/state`, then
-`odoo-task-tracker`), `ODOO_ORCHESTRATOR_HOME` (default
-`~/.local/state/odoo-orchestrator`), `MIN_FREE_GB`, `DISPATCH_SETTLE_S`,
+`ODOO_DEV_HOME` (default `~/.config/odoo-dev`; the one state root, mounted and
+exported in every service), `MIN_FREE_GB`, `DISPATCH_SETTLE_S`,
 `DISPATCH_POLL_S`, `DISPATCH_DEADLINE_S`, `DISPATCH_ADMIT_TIMEOUT_S`,
 `DISPATCH_INVARIANTS_FILE`, `DISPATCH_ENTRY`, `DISPATCH_ADDITIONAL_FEATURES`,
-`DISPATCH_ARTIFACTS_DIR`, `USERPROFILE`, `DISPATCH_REPO_OWNER`,
-`DISPATCH_REPO_MAP_FILE` (default `~/.config/odoo-dev/repo-map.json`, copied into each job's bundle). The dispatcher
+`USERPROFILE`, `DISPATCH_REPO_OWNER`. The dispatcher
 finds the config owner of each repo under `DISPATCH_CONFIG_ROOT/github.com/*/<repo>`;
 `DISPATCH_REPO_OWNER` only picks one when a repo name exists under two owners.
 
@@ -39,8 +39,7 @@ Every bind mount uses the same path on the host and in the container. The
 devcontainer CLI and `docker` resolve bind sources on the host daemon, and the
 dispatcher compares the host paths with Docker's bind sources. The mounts are the
 checkout (read-only), the repos dir, the config root, the Claude home,
-`~/.config/odoo-dev`, the dispatch state dir, the orchestrator home and
-`~/.local/state/usage-log`. Do not nest one of these paths inside another.
+and `ODOO_DEV_HOME`. Do not nest one of these paths inside another.
 
 ## Web UI
 
@@ -49,12 +48,14 @@ dispatcher exits (`restart: unless-stopped`). Open `http://127.0.0.1:8765`. The 
 is published on the loopback interface only. The pages are read-only:
 
 - Jobs: every job by state, refreshed every 3 s, and a detail page per job with
-  the run outcome, the token and cost figures and the files of its artifact dir.
-- Queue: briefs and approved tasks in the orchestrator home that have no job yet.
-- Friction: the `friction/<date>.md` files of the state dir and the orchestrator home.
+  the run outcome, the token and cost figures and the files of its bundle.
+- Queue: the pending and running jobs.
+- Friction: the friction entries of each task.
+- Usage: the usage lines of the last days, by kind and name.
 
-The service mounts the state dir, the orchestrator home and the usage-log dir
-read-write (a `:ro` bind breaks a WAL reader) and the artifacts dir read-only.
+See `apps/webui/README.md` for the routes.
+
+The service mounts `ODOO_DEV_HOME` read-write (a `:ro` bind breaks a WAL reader).
 It does not mount the docker socket. Stop it with
 `docker compose -p odoo-orchestrator stop webui`.
 
@@ -62,11 +63,11 @@ It does not mount the docker socket. Stop it with
 
 `plugins/odoo-orchestrator/scripts/orchestrator.sh` runs `orchestrator.py` in the
 `orchestrator` service (`docker compose run --rm -T`, standard input passes
-through). The service reuses the `dispatcher` image target, runs as the host
-UID:GID and has no docker socket. It mounts three paths at identical paths: the
-orchestrator home, the scripts dir of the plugin copy that holds the wrapper
-(read-only, set as `ODOO_ORCHESTRATOR_SCRIPTS_DIR`) and the artifacts dir
-(read-only). Without `ODOO_ORCHESTRATOR_SCRIPTS_DIR` the scripts dir of
+through). The service reuses the `dispatcher` image target (it imports
+`odoo_dev_data` and `dispatcher.reporting`), runs as the host UID:GID and has no
+docker socket. It mounts two paths at identical paths: `ODOO_DEV_HOME` and the
+scripts dir of the plugin copy that holds the wrapper (read-only, set as
+`ODOO_ORCHESTRATOR_SCRIPTS_DIR`). Without `ODOO_ORCHESTRATOR_SCRIPTS_DIR` the scripts dir of
 `ODOO_ORCHESTRATOR_CHECKOUT` is used.
 
 ## Notes

@@ -1,0 +1,316 @@
+"""The shared derived-session upload loop (issue #354).
+
+This is the single upload code path shared by every surface: the ``odoo-tui``
+``u`` key and the headless ``odoo-dev upload`` subcommand both derive sessions
+the same way (the ``query_sessions`` command) and feed those session dicts into
+:func:`upload_sessions` here, so a non-interactive invocation bills exactly the
+rows the TUI would. It lives in ``billing`` — not in a command — because it is
+shared workflow logic between two interaction surfaces and the built-in command surface is pinned 1:1 to the explicit MCP tool
+surface, which deliberately does not expose an upload tool.
+
+The loop is: **reconcile each session, then orphan-sweep once**. Sessions are
+reconciled through :func:`odoo_dev_core.billing.timesheet.reconcile_session`, the
+sole ``account.analytic.line`` hours-writer for the derived-upload path, so a
+re-run never double-bills (each session's stable ``session_key`` maps to one
+row). Sessions lacking a numeric task id carry no Odoo task to bill and are
+skipped. After billing, the stale-mapping sweep
+(:func:`odoo_dev_core.billing.timesheet.sweep_orphaned_uploads`, #353) diffs the
+upload ledger against the just-derived key set for the window and zeroes /
+retires any mapping that no longer derives, so merged-away sessions are not
+double-counted. Because the sweep runs inside this shared path, both entry
+points get it. In ``dry_run`` mode the same sessions are selected and
+summarised but no Odoo write (bill or sweep) is issued.
+"""
+
+from __future__ import annotations
+
+from datetime import date, datetime, time, timedelta
+from decimal import ROUND_HALF_UP, Decimal
+from typing import Any, Optional
+
+from odoo_client._utils import as_utc
+from odoo_client.client import OdooClient
+from odoo_dev_core.ports import SettingsView, StateStore
+from odoo_dev_core.billing.summary import (
+    summarize_run_activity,
+    summarize_session_context,
+)
+from odoo_client.transport.errors import OdooError
+
+from .timesheet import reconcile_session, sweep_orphaned_uploads
+
+
+def _round_to_step(value: float, step: float) -> float:
+    """Round ``value`` to the nearest multiple of ``step`` (half-up).
+
+    Half-up (not banker's) rounding is used so a session landing exactly on a
+    half-step always rounds toward the larger multiple, matching how billing is
+    read by a human. A ``step`` of ``0`` (or negative) disables rounding and
+    returns ``value`` unchanged. :class:`~decimal.Decimal` arithmetic on the
+    string forms avoids binary-float drift (e.g. ``1.87 / 0.05`` landing at
+    ``37.399999`` and rounding down to ``1.85`` for the wrong reason).
+    """
+    if step <= 0:
+        return value
+    quotient = (Decimal(str(value)) / Decimal(str(step))).to_integral_value(
+        rounding=ROUND_HALF_UP
+    )
+    return float(quotient * Decimal(str(step)))
+
+
+def _billable_hours(raw_hours: float, minimum: float, step: float) -> float:
+    """Apply the configurable billing policy to one session's wall-clock span.
+
+    The single choke point for issue #355: a derived session bills its raw
+    wall-clock span, but that silently under-bills — a single-event session
+    (``MIN == MAX`` timestamp) spans zero hours and a 30-second session rounds
+    toward nothing. The span is first rounded to the nearest ``step`` multiple
+    (half-up; ``step == 0`` disables rounding), then raised to ``minimum`` so a
+    below-minimum session is floored *up* to the minimum (never dropped) and the
+    rounded result can never dip below the floor. Both the TUI ``u`` key and
+    ``odoo-dev upload`` reach this through :func:`upload_sessions`.
+
+    :param raw_hours: The session's raw wall-clock span in hours.
+    :param minimum: The per-session floor in hours (``min_session_hours``).
+    :param step: The rounding multiple in hours (``round_session_hours``).
+    :return: The hours to bill, ``>= minimum``.
+    """
+    return max(_round_to_step(raw_hours, step), minimum)
+
+
+def _numeric_task_id(value: Any) -> Optional[int]:
+    """Return ``value`` as an int when it is a numeric task id, else None.
+
+    A derived session whose ``task_id`` is non-numeric (e.g. the repo-less
+    sentinel or an unresolved label) has no Odoo ``project.task`` to bill, so
+    the caller skips it rather than fabricating a target.
+    """
+    try:
+        return int(str(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def range_bounds(
+    start_date: Optional[str], end_date: Optional[str]
+) -> tuple[datetime, datetime]:
+    """Resolve inclusive ISO date strings into the ``[lo, hi)`` window bounds.
+
+    Matches the ``query_sessions`` command's inclusive-date semantics (and the
+    TUI's window bounds): ``lo`` is midnight of the start day and ``hi`` is
+    midnight of the day after the end, so the whole end day is covered. An
+    omitted bound defaults to the widest representable range, letting a caller
+    upload "everything". The orphan sweep is scoped to these same bounds so it
+    only retires mappings belonging to the queried window.
+    """
+    start = date.fromisoformat(start_date) if start_date else None
+    end = date.fromisoformat(end_date) if end_date else None
+    lo = datetime.combine(start, time.min) if start else datetime.min
+    if end is None:
+        return lo, datetime.max
+    return lo, datetime.combine(end + timedelta(days=1), time.min)
+
+
+# Separator between a timesheet name's narrative headline and the machine tally
+# demoted behind it (#710). The tally is kept — it is the only reconstructable
+# record of what ran — but it is explicitly labelled as the debug tail so a
+# reviewer reads the narrative first and stops there.
+_DEBUG_JOIN = "; debug: "
+
+
+def _compose_description(headline: str, detail: str) -> str:
+    """Join the narrative headline and the machine tally, headline first (#710).
+
+    The explicit requirement of #710: tool tallies are a TRAILING DEBUG SUFFIX,
+    never the headline. With no headline derived the tally stands alone exactly
+    as it did before, so nothing that used to name a row stops naming it.
+    """
+    if headline and detail:
+        return f"{headline}{_DEBUG_JOIN}{detail}"
+    return headline or detail
+
+
+def _derived_description(
+    state: StateStore, task_id: int, session: dict[str, Any]
+) -> str:
+    """Derive the timesheet entry's description for one session (#626, #710).
+
+    Two halves, composed by :func:`_compose_description`:
+
+    * The **headline** — :func:`summarize_session_context` over the session
+      window's events: the chatter notes the user wrote on the task, else the
+      commits / PR titles / review states recorded in the window, else the hook
+      context (first user prompt, else ``cwd``). This is what a reviewer reads.
+    * The **debug tail** — :func:`summarize_run_activity` over the same events.
+      Tool tallies live HERE (#710).
+
+    With neither half the bare ``[/] session {key}`` fallback stands. Derived
+    text is internal/local and carries NO length cap — the 500-character limit
+    applies only to posted chatter bodies, never to timesheet names.
+
+    Best-effort by design: the description is display metadata, so a derivation
+    fault must never block billing the hours — any failure falls back to the
+    session-key name, mirroring the telemetry stance of the MCP event emitter.
+    """
+    fallback = f"[/] session {session.get('session_key', '')}"
+    try:
+        started = as_utc(datetime.fromisoformat(session["started_at"]))
+        ended = as_utc(datetime.fromisoformat(session["ended_at"]))
+        events = state.get_task_events(str(task_id), started, ended)
+        detail = summarize_run_activity(events, [])
+        text = _compose_description(summarize_session_context(events), detail)
+    except Exception:
+        return fallback
+    return f"[/] {text}" if text else fallback
+
+
+def _upload_one(
+    client: OdooClient,
+    state: StateStore,
+    task_id: int,
+    session: dict[str, Any],
+    dry_run: bool,
+    minimum: float,
+    step: float,
+) -> dict[str, Any]:
+    """Bill one derived session and return its summary row.
+
+    Delegation only: the session's identity (numeric ``task_id``, stable
+    ``session_key``, ``duration_secs`` and its ``started_at``/``ended_at``
+    bounds) is passed to :func:`reconcile_session`, which resolves and rewrites
+    the single row the session maps to and records the window bounds the orphan
+    sweep keys on. The raw wall-clock span is passed through the billing policy
+    (:func:`_billable_hours`, issue #355) first, so the minimum and rounding
+    apply to whatever is actually billed — and, because the same billed hours
+    populate the summary row, a dry-run preview shows exactly what a real run
+    would write. The entry's name is the machine-derived description
+    (:func:`_derived_description`, #626/#710) — fully automatic, never a human
+    gate — leading with what was actually done and falling back to the session
+    key only when nothing at all derives. Idempotent per
+    session key. On a dry run nothing is written and the row's ``timesheet_id``
+    is None.
+    """
+    raw_hours = float(session.get("duration_secs", 0)) / 3600
+    hours = _billable_hours(raw_hours, minimum, step)
+    key = session.get("session_key", "")
+    timesheet_id: Optional[int] = None
+    if not dry_run:
+        description = _derived_description(state, task_id, session)
+        timesheet_id = reconcile_session(
+            client,
+            state,
+            task_id,
+            key,
+            description,
+            hours,
+            datetime.fromisoformat(session["started_at"]),
+            datetime.fromisoformat(session["ended_at"]),
+        )
+    return {
+        "task_id": task_id,
+        "session_key": key,
+        "hours": hours,
+        "timesheet_id": timesheet_id,
+    }
+
+
+def _failure_row(
+    session: dict[str, Any], task_id: int, exc: OdooError
+) -> dict[str, Any]:
+    """Build a structured per-session failure row from a caught Odoo fault (#582).
+
+    Isolates one session's server-side fault (e.g. the #576 "At least one
+    analytic account must be set" ``UserError`` raised when a project/task has no
+    analytic account) into a summary row naming the session and task, so the rest
+    of the batch still bills and the caller can surface exactly which session was
+    skipped and why instead of aborting on a raw traceback.
+    """
+    return {
+        "session_key": session.get("session_key", ""),
+        "task_id": task_id,
+        "error": str(exc),
+    }
+
+
+def upload_sessions(
+    client: OdooClient,
+    state: StateStore,
+    sessions: list[dict[str, Any]],
+    *,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    dry_run: bool = False,
+    config: SettingsView,
+) -> dict[str, Any]:
+    """Bill each derived session, then sweep orphaned upload mappings.
+
+    The single shared upload path (#354): every billable session (numeric task
+    id) is reconciled through the sole hours-writer, then the stale-mapping
+    sweep runs once, scoped to the same inclusive date range the sessions were
+    derived over. Callers pass the range they queried (``start_date`` /
+    ``end_date``) rather than precomputed bounds — the bounds are resolved here
+    via :func:`range_bounds`, so the query window and the sweep window cannot
+    drift apart. When ``dry_run`` is set the billable set is computed and
+    summarised but no Odoo write is issued — neither the per-session reconcile
+    nor the sweep — so callers can preview exactly what a real run would bill.
+
+    :param client: The Odoo API client (the only writer of the timesheet rows).
+    :param state: The local state client the upload ledger is kept in.
+    :param sessions: ``query_sessions`` result dicts to bill.
+    :param start_date: Inclusive ISO start date (``YYYY-MM-DD``) of the range
+        the sessions were derived over, or None for unbounded.
+    :param end_date: Inclusive ISO end date, or None for unbounded.
+    :param dry_run: When True, select and summarise but write nothing to Odoo.
+    :param config: Resolved SDK settings supplying the per-session billing
+        policy (``min_session_hours`` / ``round_session_hours``, issue #355).
+        The caller supplies it; core never loads a config itself.
+    :return: A summary dict with ``uploaded`` (billable session count),
+        ``skipped`` (non-numeric-task sessions), ``failed`` (per-session
+        ``{session_key, task_id, error}`` rows for sessions whose Odoo write
+        faulted — #582/#576, the batch continued past them), ``retired`` (orphan
+        mappings swept), ``dry_run``, and ``rows`` (one ``{task_id, session_key,
+        hours, timesheet_id}`` per successfully-billed session; ``hours`` is the
+        policy-adjusted billed hours; ``timesheet_id`` is None on a dry run).
+    """
+    minimum = config.min_session_hours
+    step = config.round_session_hours
+    rows: list[dict[str, Any]] = []
+    failed: list[dict[str, Any]] = []
+    skipped = 0
+    for session in sessions:
+        task_id = _numeric_task_id(session.get("task_id"))
+        if task_id is None:
+            skipped += 1
+            continue
+        # Per-session isolation (#582): one session's server fault (e.g. the #576
+        # missing-analytic-account UserError) must not abort the batch or skip
+        # the orphan sweep. Its key stays in ``sessions`` so the sweep never
+        # zeroes a partially-billed row for it.
+        try:
+            rows.append(
+                _upload_one(client, state, task_id, session, dry_run, minimum, step)
+            )
+        except OdooError as exc:
+            failed.append(_failure_row(session, task_id, exc))
+    retired = 0
+    if not dry_run:
+        window_lo, window_hi = range_bounds(start_date, end_date)
+        # Window-scoped orphan sweep (#353): ``derived_keys`` and
+        # ``derived_task_ids`` come from the derived ``sessions`` — the legacy
+        # NULL-bounds ledger branch keys on the task ids active in this window.
+        retired = sweep_orphaned_uploads(
+            client,
+            state,
+            derived_keys={s.get("session_key", "") for s in sessions},
+            derived_task_ids={str(s.get("task_id")) for s in sessions},
+            window_lo=window_lo,
+            window_hi=window_hi,
+        )
+    return {
+        "uploaded": len(rows),
+        "skipped": skipped,
+        "failed": failed,
+        "retired": retired,
+        "dry_run": dry_run,
+        "rows": rows,
+    }

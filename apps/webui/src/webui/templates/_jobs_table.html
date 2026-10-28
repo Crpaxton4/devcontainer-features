@@ -1,0 +1,17 @@
+<div id="jobs-table" hx-get="{{ url_for('jobs.index') }}" hx-trigger="every 3s" hx-swap="outerHTML">
+{% if entries %}
+  <table>
+    <tr><th>job</th><th>task</th><th>state</th><th>outcome</th><th>duration (s)</th><th>cost (USD)</th><th>questions</th></tr>
+    {% for e in entries %}
+    <tr>
+      <td><a href="{{ url_for('jobs.detail', job_id=e.job_id) }}">{{ e.job_id }}</a></td>
+      <td>{{ e.task }}</td><td>{{ e.state }}</td><td>{{ e.outcome }}</td>
+      <td>{{ e.duration_s if e.duration_s is not none else "" }}</td>
+      <td>{{ e.cost_usd }}</td><td>{{ e.question_count }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+{% else %}
+  <p class="empty">No job exists.</p>
+{% endif %}
+</div>

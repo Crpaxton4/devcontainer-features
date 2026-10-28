@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}Friction{% endblock %}
+{% block content %}
+<h1>Friction log</h1>
+{% for task, rows in groups %}
+<h2>Task {{ task }}</h2>
+<table>
+  <tr><th>recorded</th><th>job</th><th>tool</th><th>expected</th><th>observed</th><th>did</th></tr>
+  {% for r in rows %}
+  <tr><td>{{ r.recorded_at }}</td><td>{{ r.job_id }}</td><td>{{ r.tool }}</td><td>{{ r.expected }}</td><td>{{ r.observed }}</td><td>{{ r.did }}</td></tr>
+  {% endfor %}
+</table>
+{% else %}
+<p class="empty">No friction entry exists.</p>
+{% endfor %}
+{% endblock %}

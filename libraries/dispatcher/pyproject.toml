@@ -4,11 +4,11 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dispatcher"
-version = "1.2.0"
+version = "9.0.0"
 description = "Host-side task dispatcher: one Odoo task per devcontainer session, recorded as a run."
 requires-python = ">=3.11"
 dependencies = [
-    "odoo_sdk",
+    "odoo_dev_data",
     "usage_log",
 ]
 
@@ -27,14 +27,6 @@ dispatch = "dispatcher.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
-
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-addopts = "--import-mode=importlib"
-# Prepend *this* checkout's sources, ahead of any editable install in a shared
-# .venv whose .pth file names one absolute path into another checkout (#860).
-# The second entry is the SDK this package is stacked on.
-pythonpath = ["src", "../odoo_sdk/src", "../usage_log/src", "tests"]
 
 [tool.black]
 target-version = ["py311"]
@@ -59,13 +51,3 @@ max-complexity-allowed = 15
 exclude = ["tests"]
 output-format = ["json"]
 output = "reports/complexipy/"
-
-[tool.uv]
-# odoo_sdk resolves toon-format, a pre-release; mirror the SDK's setting.
-prerelease = "allow"
-
-[tool.uv.sources]
-# One direction only: the dispatcher depends on the SDK, never the reverse.
-odoo_sdk = { path = "../odoo_sdk" }
-# The usage log writer (#1204): the dispatcher calls it, it knows nothing of us.
-usage_log = { path = "../usage_log" }

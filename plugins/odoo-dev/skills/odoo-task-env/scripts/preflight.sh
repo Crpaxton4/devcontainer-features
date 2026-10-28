@@ -205,13 +205,23 @@ fi
 # Needed in both contexts: every skill downstream talks to GitHub.
 check gh-auth gh auth status
 
-# The mutable state dir lives outside the plugin tree, so a fresh machine or a
-# skipped bootstrap leaves it missing. Named here rather than discovered later as
-# a bogus "project unmapped" from repo-map.sh reading a file that is not there.
+# The state dir lives outside the plugin tree and the suite creates it, never this
+# script. A missing dir is named here, not discovered later. The repo map inside
+# it is created on the first `odoo-dev repo-map set`, so its absence is no failure.
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$SCRIPT_DIR/../../.." && pwd)}"
 STATE_DIR="$(bash "$PLUGIN_ROOT/scripts/state-dir.sh")"
-state_dir_ready() { [ -f "$STATE_DIR/repo-map.json" ]; }
+state_dir_ready() { [ -d "$STATE_DIR" ]; }
 check state-dir state_dir_ready
+
+# The repo-map scripts and the suite call the odoo-dev CLI.
+odoo_dev_cli_ready() {
+  local version
+  version="$(odoo-dev --version)" || return 1
+  version="${version#odoo-dev }"
+  # requires.json: odoo-dev >=9
+  [ "${version%%.*}" -ge 9 ] 2>/dev/null
+}
+check odoo-dev-cli odoo_dev_cli_ready
 
 # Leftover pre-migration loose copies of plugin skills shadow their plugin
 # twins. Reports only; the strays are safe to delete — the devcontainer feature

@@ -3,7 +3,7 @@
 These exercise the pure logic that the mutation workflow relies on: kill-rate
 computation, the pass/fail decision against the 90% floor, surviving-mutant
 extraction, issue-body assembly, and CLI exit codes. The gate is a CI-only
-helper and must NOT depend on the ``odoo_sdk`` package, so this test imports it
+helper and must NOT depend on the ``odoo_client`` package, so this test imports it
 directly by path from the same directory.
 """
 
@@ -33,7 +33,7 @@ def _load_gate():
 gate = _load_gate()
 
 
-def _mutant(outcome, module="src/odoo_sdk/x.py", operator="core/ReplaceOp", occ=0):
+def _mutant(outcome, module="src/odoo_client/x.py", operator="core/ReplaceOp", occ=0):
     return {
         "test_outcome": outcome,
         "module": module,

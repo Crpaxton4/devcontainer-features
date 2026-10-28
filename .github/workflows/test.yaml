@@ -75,10 +75,10 @@ jobs:
 
       - name: "Bundle Python libraries into feature"
         run: |
-          uv build --directory libraries/odoo_sdk
-          cp libraries/odoo_sdk/dist/*.whl devcontainer-features/src/personal-features/
-          uv build --directory libraries/usage_log
-          cp libraries/usage_log/dist/*.whl devcontainer-features/src/personal-features/
+          for pkg in odoo_client odoo_dev_data odoo_dev_core odoo_cli odoo_mcp odoo_tui usage_log; do
+            uv build --package "$pkg" --out-dir dist
+          done
+          cp dist/*.whl devcontainer-features/src/personal-features/
 
       # Run the same script consumers run, rather than a hardcoded copy of the
       # mount list: the list is then defined in exactly one place, and a mount
@@ -141,10 +141,10 @@ jobs:
 
       - name: "Bundle Python libraries into feature"
         run: |
-          uv build --directory libraries/odoo_sdk
-          cp libraries/odoo_sdk/dist/*.whl devcontainer-features/src/personal-features/
-          uv build --directory libraries/usage_log
-          cp libraries/usage_log/dist/*.whl devcontainer-features/src/personal-features/
+          for pkg in odoo_client odoo_dev_data odoo_dev_core odoo_cli odoo_mcp odoo_tui usage_log; do
+            uv build --package "$pkg" --out-dir dist
+          done
+          cp dist/*.whl devcontainer-features/src/personal-features/
 
       # Run the same script consumers run, rather than a hardcoded copy of the
       # mount list: the list is then defined in exactly one place, and a mount
@@ -190,10 +190,10 @@ jobs:
 
       - name: "Bundle Python libraries into feature"
         run: |
-          uv build --directory libraries/odoo_sdk
-          cp libraries/odoo_sdk/dist/*.whl devcontainer-features/src/personal-features/
-          uv build --directory libraries/usage_log
-          cp libraries/usage_log/dist/*.whl devcontainer-features/src/personal-features/
+          for pkg in odoo_client odoo_dev_data odoo_dev_core odoo_cli odoo_mcp odoo_tui usage_log; do
+            uv build --package "$pkg" --out-dir dist
+          done
+          cp dist/*.whl devcontainer-features/src/personal-features/
 
       # Run the same script consumers run, rather than a hardcoded copy of the
       # mount list: the list is then defined in exactly one place, and a mount
@@ -210,7 +210,7 @@ jobs:
   # devcontainer CLI - a per-feature precondition the shared matrices don't
   # model (and test-scenarios would cross-product every feature with every
   # scenario). It also needs none of the personal-features plumbing (no Node
-  # base image, no odoo_sdk wheel bundling, no setup.sh mount sources): the
+  # base image, no odoo_client wheel bundling, no setup.sh mount sources): the
   # feature is tested alone via `-f second-brain`.
   test-second-brain:
     runs-on: ubuntu-latest

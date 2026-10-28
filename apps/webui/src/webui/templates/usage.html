@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}Usage{% endblock %}
+{% block content %}
+<h1>Usage</h1>
+<form id="usage-form" method="get" action="{{ url_for('usage.index') }}"
+      hx-get="{{ url_for('usage.index') }}" hx-target="#usage-table" hx-swap="outerHTML"
+      hx-push-url="true" hx-trigger="change, submit">
+  <label>Kind <input name="kind" value="{{ kind }}"></label>
+  <label>Days <input type="number" min="0" name="days" value="{{ days }}" style="width:5em"></label>
+  <button type="submit">Apply</button>
+</form>
+{% include "_usage_table.html" %}
+{% endblock %}

@@ -1,5 +1,22 @@
 {
     "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+    "plugins": [
+        {
+            "type": "linked-versions",
+            "groupName": "odoo-dev-suite",
+            "components": [
+                "dispatcher",
+                "odoo_client",
+                "odoo_dev_data",
+                "odoo_dev_core",
+                "usage_log",
+                "odoo_cli",
+                "odoo_mcp",
+                "odoo_tui",
+                "webui"
+            ]
+        }
+    ],
     "packages": {
         ".": {
             "release-type": "simple",
@@ -13,7 +30,8 @@
                 "plugins/odoo-dev",
                 "plugins/odoo-orchestrator",
                 "libraries/dispatcher",
-                "libraries/webui",
+                "libraries",
+                "apps",
                 "stack"
             ],
             "extra-files": [
@@ -21,11 +39,6 @@
                     "type": "json",
                     "path": "devcontainer-features/src/personal-features/devcontainer-feature.json",
                     "jsonpath": "$.version"
-                },
-                {
-                    "type": "toml",
-                    "path": "libraries/odoo_sdk/pyproject.toml",
-                    "jsonpath": "$.project.version"
                 }
             ]
         },
@@ -54,6 +67,94 @@
         "libraries/dispatcher": {
             "release-type": "simple",
             "component": "dispatcher",
+            "extra-files": [
+                {
+                    "type": "toml",
+                    "path": "pyproject.toml",
+                    "jsonpath": "$.project.version"
+                }
+            ]
+        },
+        "libraries/odoo_client": {
+            "release-type": "simple",
+            "component": "odoo_client",
+            "extra-files": [
+                {
+                    "type": "toml",
+                    "path": "pyproject.toml",
+                    "jsonpath": "$.project.version"
+                }
+            ]
+        },
+        "libraries/odoo_dev_data": {
+            "release-type": "simple",
+            "component": "odoo_dev_data",
+            "extra-files": [
+                {
+                    "type": "toml",
+                    "path": "pyproject.toml",
+                    "jsonpath": "$.project.version"
+                }
+            ]
+        },
+        "libraries/odoo_dev_core": {
+            "release-type": "simple",
+            "component": "odoo_dev_core",
+            "extra-files": [
+                {
+                    "type": "toml",
+                    "path": "pyproject.toml",
+                    "jsonpath": "$.project.version"
+                }
+            ]
+        },
+        "libraries/usage_log": {
+            "release-type": "simple",
+            "component": "usage_log",
+            "extra-files": [
+                {
+                    "type": "toml",
+                    "path": "pyproject.toml",
+                    "jsonpath": "$.project.version"
+                }
+            ]
+        },
+        "apps/odoo_cli": {
+            "release-type": "simple",
+            "component": "odoo_cli",
+            "extra-files": [
+                {
+                    "type": "toml",
+                    "path": "pyproject.toml",
+                    "jsonpath": "$.project.version"
+                }
+            ]
+        },
+        "apps/odoo_mcp": {
+            "release-type": "simple",
+            "component": "odoo_mcp",
+            "extra-files": [
+                {
+                    "type": "toml",
+                    "path": "pyproject.toml",
+                    "jsonpath": "$.project.version"
+                }
+            ]
+        },
+        "apps/odoo_tui": {
+            "release-type": "simple",
+            "component": "odoo_tui",
+            "extra-files": [
+                {
+                    "type": "toml",
+                    "path": "pyproject.toml",
+                    "jsonpath": "$.project.version"
+                }
+            ]
+        },
+        "apps/webui": {
+            "release-type": "simple",
+            "component": "webui",
             "extra-files": [
                 {
                     "type": "toml",

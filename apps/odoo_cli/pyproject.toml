@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=83.0.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "odoo_cli"
+version = "9.0.0"
+description = "Command-line app of the odoo-dev suite: the odoo-dev entry point."
+requires-python = ">=3.10"
+dependencies = [
+    "odoo_dev_core",
+]
+
+[project.scripts]
+odoo-dev = "odoo_cli.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"*" = ["py.typed"]
+
+[tool.black]
+target-version = ["py310"]
+
+[tool.complexipy]
+paths = ["src"]
+max-complexity-allowed = 15

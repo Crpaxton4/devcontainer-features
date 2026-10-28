@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# writeback.sh — deterministic Odoo chatter/activity writeback over `odoo-sdk cmd`.
+# writeback.sh — deterministic Odoo chatter/activity writeback over `odoo-dev cmd`.
 #
 # Why: writebacks used to ride on "probe the mcp__odoo-mcp__* tools and pick one",
 # which made every PR/release note a model-driven judgement call — and before the
@@ -10,26 +10,20 @@
 #
 # Usage:
 #   writeback.sh note <task_id> <text> [--dedupe-key KEY]
-#       -> odoo-sdk cmd get_tasks        --args '{"domain":[["id","=",N]],"limit":1}'
-#          then
-#          odoo-sdk cmd start_task       --args '{"task_id":N,"task_name":...,
-#            "project_id":...,"project_name":...}'
-#          (the ensure-session step — see "Sessions" below; start_task needs the
-#           resolved identity, which is why the task is read first)
-#       -> odoo-sdk cmd task_note        --args '{"task_id":N,"note":TEXT[,"dedupe_key":KEY]}'
+#       -> odoo-dev cmd task_note       --args '{"task_id":N,"note":TEXT[,"dedupe_key":KEY]}'
 #   writeback.sh activity <task_id> --summary TEXT
 #                [--type NAME] [--note TEXT] [--deadline YYYY-MM-DD] [--user-id N]
-#       -> odoo-sdk cmd search_activity_types --args '{"query":NAME,"res_model":"project.task"}'
+#       -> odoo-dev cmd search_activity_types --args '{"query":NAME,"res_model":"project.task"}'
 #          (only with --type; exact case-insensitive name match wins, else a single
 #           candidate is accepted, else this is an error naming every candidate)
-#       -> odoo-sdk cmd schedule_activity --args '{"res_id":N,"summary":...,
+#       -> odoo-dev cmd schedule_activity --args '{"res_id":N,"summary":...,
 #            "activity_type":<resolved id>,"note":...,"date_deadline":...,"user_id":...}'
 #          (res_model is left to the command's project.task default)
 #   writeback.sh done <task_id> --match PATTERN [--feedback TEXT]
-#       -> odoo-sdk cmd get_activities   --args '{"res_id":N}'
+#       -> odoo-dev cmd get_activities   --args '{"res_id":N}'
 #          (PATTERN is a case-insensitive substring matched against each activity's
 #           summary and activity-type name; exactly one activity must match)
-#       -> odoo-sdk cmd mark_activity_done --args '{"activity_id":ID,"feedback":TEXT}'
+#       -> odoo-dev cmd mark_activity_done --args '{"activity_id":ID,"feedback":TEXT}'
 #
 # The 500-character chatter cap is pre-checked here for `note` so a too-long note
 # fails fast with the count in the message — but the SDK's
@@ -37,27 +31,14 @@
 # whatever passes the pre-check is still judged server-side, and rejected, never
 # truncated, when it is over.
 #
-# Preflight (#902 #889): `odoo-sdk cmd` is what every verb below rides on, and it
-# has existed since #727 (cli/__main__.py registers the `cmd` subparser and routes
-# it to cmd_cmd). Both issues were filed from machines whose *installed* odoo-sdk
-# predated that release, so the binary was on PATH but argparse rejected `cmd` and
-# the caller got a usage dump on stderr and nothing on stdout. Checking that the
-# binary exists is therefore not enough: `odoo-sdk cmd --help` is probed too, and a
-# CLI that cannot serve `cmd` fails here as MissingCLI (exit 4) naming the upgrade.
+# Preflight (#902 #889): `odoo-dev cmd` is what every verb below rides on. A binary
+# that exists is not enough: an old install answers `cmd` with an argparse usage
+# dump and nothing on stdout. So `odoo-dev --version` is probed once, and its major
+# is compared with the suite version this plugin requires (the "odoo-dev" entry of
+# requires.json at the plugin root, for example ">=9.0"). A CLI that is
+# missing or older fails here as MissingCLI (exit 4) naming the upgrade.
 #
-# Sessions (#891): `task_note` requires a RUNNING tracking session
-# (require_active_run) and raises TaskNotRunningError without one — which bites
-# exactly when the branch was cut by hand rather than driven through start_task.
-# The `note` verb therefore ensures the session itself: it resolves the task's
-# identity with `get_tasks` and calls `start_task`, which is idempotent in every
-# session state (already RUNNING -> already_running: true and zero side effects;
-# AWAITING_ANSWERS / STOPPED -> reopened in place; none -> a fresh run). The
-# session is deliberately NOT stopped afterwards: the note is part of running work,
-# and stopping a session this script did not own would truncate someone's tracking.
-# `activity` and `done` do not ensure a session, because none of the commands they
-# dispatch (search_activity_types / schedule_activity / get_activities /
-# mark_activity_done) calls require_active_run — starting a run for them would
-# leave a session nobody opened and nobody stops.
+# Sessions: no verb starts or needs a run. `task_note` posts without an active run.
 #
 # Output: on success, the CLI's own JSON result, verbatim, as the last stdout
 # line. On a CLI failure, the CLI's JSON error envelope {"error":{"type",
@@ -75,7 +56,7 @@
 #           | 2 argument or pre-check error
 #           | 3 resolution failure (no or ambiguous type / activity match,
 #             unresolvable task identity)
-#           | 4 odoo-sdk is not on PATH, or is too old to serve `cmd` (#727),
+#           | 4 odoo-dev is not on PATH, or is older than the plugin requires,
 #             or answered a dispatch with non-JSON while exiting 0
 set -euo pipefail
 
@@ -131,7 +112,7 @@ cli() {
   CLI_RC=0
   cli_err_file
   : > "$CLI_ERR"
-  CLI_OUT="$(odoo-sdk cmd "$1" --args "$2" 2>"$CLI_ERR")" || CLI_RC=$?
+  CLI_OUT="$(odoo-dev cmd "$1" --args "$2" 2>"$CLI_ERR")" || CLI_RC=$?
   if is_json "$CLI_OUT"; then
     return 0
   fi
@@ -141,7 +122,7 @@ cli() {
     let raw = require("fs").readFileSync(0, "utf8").trim();
     if (raw.length > 2000) raw = raw.slice(0, 2000) + " [...truncated]";
     console.log(JSON.stringify({error: {type: "NonJsonOutput", message:
-      "odoo-sdk cmd " + name + " exited " + code + " without printing JSON — raw " +
+      "odoo-dev cmd " + name + " exited " + code + " without printing JSON — raw " +
       "output: " + (raw || "(none)")}}));
   ' "$1" "$CLI_RC")"
   # A child that failed keeps its own code; one that exited 0 with garbage is a
@@ -165,52 +146,27 @@ case "$task_id" in
   ''|*[!0-9]*) echo "task_id must be numeric: $task_id" >&2; exit 2 ;;
 esac
 
-command -v odoo-sdk >/dev/null 2>&1 \
-  || fail_json 4 "MissingCLI" "odoo-sdk is not on PATH — install it with: python3 -m pip install ./libraries/odoo_sdk"
+command -v odoo-dev >/dev/null 2>&1 \
+  || fail_json 4 "MissingCLI" "odoo-dev is not on PATH — install the suite with: uv sync --all-packages"
 
-# The binary existing is not the same as the binary serving `cmd` (#902 #889): an
-# odoo-sdk installed before #727 has no `cmd` subparser and answers every dispatch
-# below with an argparse usage dump on stderr and nothing on stdout. Probe it once,
-# here, so that case is a named error with an upgrade in it rather than a usage
-# dump attributed to whichever verb happened to run first.
+# The binary existing is not the same as the binary being the suite version this
+# plugin was written for. Read the required version from requires.json (one
+# parse), the installed one from `odoo-dev --version` ("odoo-dev <version>").
+required="$(node -e '
+  const fs = require("fs");
+  const req = JSON.parse(fs.readFileSync(process.argv[1], "utf8"))["odoo-dev"] || "";
+  const m = /(\d+)/.exec(req);
+  console.log(m ? m[1] : "");
+' "$(dirname "${BASH_SOURCE[0]}")/../requires.json" 2>/dev/null)" || required=""
 probe_rc=0
-probe_out="$(odoo-sdk cmd --help 2>&1)" || probe_rc=$?
-probe_out="${probe_out:0:400}"  # argparse names every choice it does accept; that
-                                # list is the useful half and it is short.
-[ "$probe_rc" -eq 0 ] || fail_json 4 "MissingCLI" \
-  "the installed odoo-sdk does not serve 'odoo-sdk cmd' — it predates the cmd subcommand (#727), which every writeback here dispatches through. Upgrade it with: python3 -m pip install --upgrade ./libraries/odoo_sdk (or: uv tool install --force ./libraries/odoo_sdk). Probe 'odoo-sdk cmd --help' exited ${probe_rc}: ${probe_out}"
-
-# ensure_session <task_id> — #891. task_note requires a RUNNING tracking session
-# and raises TaskNotRunningError without one, so the writeback creates it rather
-# than making the caller discover the requirement at the end of a task. start_task
-# is idempotent in every session state, but it takes *resolved* identity (task
-# name, project id and name — the MCP tool does that resolution), so the task is
-# read first. The session is left running on purpose: the note is part of the work.
-ensure_session() {
-  cli get_tasks "{\"domain\":[[\"id\",\"=\",$1]],\"limit\":1}"
-  [ "$CLI_RC" -eq 0 ] || die_cli
-  identity_rc=0
-  start_args="$(node -e '
-    const rows = JSON.parse(process.argv[1]);
-    const row = Array.isArray(rows) ? rows[0] : null;
-    if (!row) process.exit(20);
-    const project = row.project_id;
-    if (!Array.isArray(project) || project.length !== 2) process.exit(21);
-    console.log(JSON.stringify({
-      task_id: Number(process.argv[2]),
-      task_name: String(row.name),
-      project_id: Number(project[0]),
-      project_name: String(project[1]),
-    }));
-  ' "$CLI_OUT" "$1")" || identity_rc=$?
-  if [ "$identity_rc" -eq 20 ]; then
-    fail_json 3 "ValueError" "task $1 does not exist (or is not visible to this login), so no tracking session can be started for it"
-  elif [ "$identity_rc" -ne 0 ]; then
-    fail_json 3 "ValueError" "task $1 has no project, and start_task needs a resolved project — start the session yourself (mcp__odoo-mcp__start_task) and rerun"
-  fi
-  cli start_task "$start_args"
-  [ "$CLI_RC" -eq 0 ] || die_cli
-}
+probe_out="$(odoo-dev --version 2>&1)" || probe_rc=$?
+probe_out="${probe_out:0:400}"
+installed="$(printf '%s' "$probe_out" | sed -nE 's/^odoo-dev ([0-9]+)\..*/\1/p' | head -n 1)"
+if [ "$probe_rc" -ne 0 ] || [ -z "$installed" ] \
+   || { [ -n "$required" ] && [ "$installed" -lt "$required" ]; }; then
+  fail_json 4 "MissingCLI" \
+    "the installed odoo-dev CLI is missing or older than this plugin requires (major ${required:-unknown}, from requires.json). Upgrade it with: uv sync --all-packages. Probe 'odoo-dev --version' exited ${probe_rc}: ${probe_out}"
+fi
 
 case "$verb" in
   note)
@@ -228,8 +184,6 @@ case "$verb" in
     chars="$(node -e 'console.log(Array.from(process.argv[1]).length)' "$text")"
     [ "$chars" -le 500 ] || fail_json 2 "ValueError" \
       "note is ${chars} characters; the chatter cap is 500 — shorten it (the SDK rejects over-limit notes, it does not truncate)"
-    # #891: task_note refuses without a RUNNING session, so ensure one first.
-    ensure_session "$task_id"
     args="$(node -e '
       const o = {task_id: Number(process.argv[1]), note: process.argv[2]};
       if (process.argv[3] !== "") o.dedupe_key = process.argv[3];
@@ -278,7 +232,7 @@ case "$verb" in
         process.exit(21);
       ' "$CLI_OUT" "$type_name" 2>/dev/null)" || resolve_rc=$?
       if [ "$resolve_rc" -eq 20 ]; then
-        fail_json 3 "ValueError" "no activity type matches '${type_name}' — see: odoo-sdk cmd search_activity_types"
+        fail_json 3 "ValueError" "no activity type matches '${type_name}' — see: odoo-dev cmd search_activity_types"
       elif [ "$resolve_rc" -ne 0 ]; then
         candidates="$(node -e '
           const types = JSON.parse(process.argv[1]);

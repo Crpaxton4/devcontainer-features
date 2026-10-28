@@ -12,7 +12,7 @@ JSON's ``mounts`` or ``containerEnv`` no longer match the manifest rows.
 Run as a CI step (``.github/workflows/test.yaml``) and exercised by
 ``test_check_persisted_paths.py`` under ``unittest discover``.
 
-Like the other helpers here it is CI-only and stdlib-only: no ``odoo_sdk``, no
+Like the other helpers here it is CI-only and stdlib-only: no ``odoo_client``, no
 third-party TSV/JSON parser.
 """
 

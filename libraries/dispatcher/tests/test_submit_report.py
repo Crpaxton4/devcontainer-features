@@ -3,14 +3,13 @@
 import json
 
 import pytest
-from odoo_sdk.state.artifacts import ensure_bundle_dir
-from odoo_sdk.state.dispatch_state import lock_path
-from odoo_sdk.state.jobs import JobState, JobStore
+from odoo_dev_data.home import job_bundle_dir
+from odoo_dev_data.jobs import JobState, JobStore
+from odoo_dev_data.locks import exclusive
 
 from dispatcher import cli, lifecycle
-from dispatcher.lock import DispatcherLock
-from support import GOOD, FakeProc, stream
-from test_engine_cli import world  # noqa: F401  (fixture)
+from .support import GOOD, FakeProc, stream
+from .test_engine_cli import world  # noqa: F401  (fixture)
 
 
 @pytest.fixture
@@ -55,9 +54,9 @@ def _rows():
 
 
 def test_submit_while_the_lock_is_held_writes_pending_rows(
-    submit_env, tmp_path, capsys
+    submit_env, tmp_path, capsys, home
 ):
-    with DispatcherLock(lock_path()):
+    with exclusive("dispatcher", home=home):
         code, out = _call(capsys, "submit", _arg(tmp_path, "1", "2"))
     report = json.loads(out)
     assert code == cli.EXIT_OK and len(report["batch_id"]) == 32
@@ -184,32 +183,48 @@ def test_a_running_engine_picks_up_a_row_submitted_after_it_started(
     assert sorted(_rows()) == [("10", JobState.DONE), ("11", JobState.DONE)]
 
 
-def test_report_matches_the_batch_while_locked_and_after(submit_env, tmp_path, capsys):
+def test_report_is_the_batch_report_while_locked_and_after(
+    submit_env, tmp_path, capsys, home
+):
     submitted = json.loads(_call(capsys, "submit", _arg(tmp_path, "1", "2"))[1])
     batch = submitted["batch_id"]
-    with DispatcherLock(lock_path()):
+    with exclusive("dispatcher", home=home):
         code, out = _call(capsys, "report", batch)
-    assert code == cli.EXIT_OK and json.loads(out) == submitted
-    store = JobStore()
+    report = json.loads(out)
+    assert code == cli.EXIT_OK and report["batch_id"] == batch
+    assert set(report) == {"batch_id", "jobs", "totals"}
+    assert [j["state"] for j in report["jobs"]] == ["PENDING", "PENDING"]
+    store = JobStore(home=home)
     first = submitted["jobs"][0]["job_id"]
     store.mark_running(first)
-    store.complete(first, outcome="COMPLETED")
+    store.record_result(first, outcome="COMPLETED", cost_usd=0.5)
     store.close()
     after = json.loads(_call(capsys, "report", batch)[1])
     assert after["jobs"][0]["state"] == "DONE" and len(after["jobs"]) == 2
-    assert after["jobs"][0].keys() == submitted["jobs"][0].keys()
-
-
-def test_report_adds_the_bundle_when_its_directory_exists(submit_env, tmp_path, capsys):
-    submitted = json.loads(_call(capsys, "submit", _arg(tmp_path, "1", "2"))[1])
-    directory = ensure_bundle_dir(submitted["jobs"][0]["job_id"])
-    jobs = json.loads(_call(capsys, "report", submitted["batch_id"])[1])["jobs"]
-    assert jobs[0]["bundle"] == str(directory) and "bundle" not in jobs[1]
+    assert after["totals"]["done"] == 1 and after["totals"]["cost_usd"] == 0.5
 
 
 def test_report_of_an_unknown_batch_is_empty_and_exits_0(capsys):
     code, out = _call(capsys, "report", "nope")
-    assert code == cli.EXIT_OK and json.loads(out) == {"batch_id": "nope", "jobs": []}
+    report = json.loads(out)
+    assert (
+        code == cli.EXIT_OK and report["jobs"] == [] and report["totals"]["jobs"] == 0
+    )
+
+
+def test_stop_records_the_request_and_writes_the_stop_file(
+    submit_env, tmp_path, capsys, home
+):
+    submitted = json.loads(_call(capsys, "submit", _arg(tmp_path, "1", "2"))[1])
+    first = submitted["jobs"][0]["job_id"]
+    code, _ = _call(capsys, "stop", first)  # PENDING: nothing to stop
+    assert code == cli.EXIT_USAGE
+    JobStore(home=home).mark_running(first)
+    code, _ = _call(capsys, "stop", first)
+    assert code == cli.EXIT_OK
+    assert (job_bundle_dir("1", first, home) / "STOP").is_file()
+    assert JobStore(home=home).get(first).stop_requested_us is not None
+    assert _call(capsys, "stop", "nope")[0] == cli.EXIT_USAGE
 
 
 def test_the_exec_argv_carries_the_job_id(settings):

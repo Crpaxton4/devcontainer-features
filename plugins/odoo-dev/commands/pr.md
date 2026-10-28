@@ -34,7 +34,7 @@ $ARGUMENTS
 Release route: promote merged work from the first branch INTO the second, as a
 draft release PR. Inputs are the two branch names, this checkout and the repo
 map (bootstrap an unmapped checkout; never ask). No task directory, no earlier
-artifact and no confirmed branch flow is required: a missing or unconfirmed
-chain is a warning row, not a stop. The only stop is a CONFIRMED chain that
-says the typed direction runs backwards. Nothing is written to disk; re-runs are
+artifact is required, and a repo-map entry is not required: a missing entry or a
+branch outside `branch_flow` is a warning row, not a stop. The only stop is a
+`branch_flow` that says the typed direction runs backwards. Nothing is written to disk; re-runs are
 safe through the scripts.

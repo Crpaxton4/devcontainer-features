@@ -14,7 +14,7 @@
 # reason. Every case also re-asserts the JSON shape: the last stdout line is the
 # machine-readable half of this script's contract.
 #
-# Nothing here writes outside its own mktemp dir: HOME, ODOO_DEV_STATE_DIR and
+# Nothing here writes outside its own mktemp dir: HOME, ODOO_DEV_HOME and
 # CLAUDE_CONFIG_DIR are all redirected into it.
 set -uo pipefail
 
@@ -43,6 +43,12 @@ mkbin() {
     p="$(command -v "$t" 2>/dev/null)"
     case "$p" in /*) ln -sf "$p" "$dir/$t" ;; esac
   done
+}
+
+# odoo-dev that prints only its version: setup.sh asks for nothing else
+stub_odoo_dev() { # stub_odoo_dev <bin dir> <version>
+  printf '#!/bin/sh\necho "odoo-dev %s"\n' "$2" > "$1/odoo-dev"
+  chmod +x "$1/odoo-dev"
 }
 
 # gh that answers "logged in, with both scopes" without a network round trip
@@ -136,7 +142,7 @@ T="$(newtmp)"; BIN="$T/bin"
 mkbin "$BIN" node git python3
 stub_gh_authed "$BIN"
 stub_mcp_config "$T/cfg"
-out="$(env PATH="$BIN" HOME="$T/home" ODOO_DEV_STATE_DIR="$T/state" \
+out="$(env PATH="$BIN" HOME="$T/home" ODOO_DEV_HOME="$T/state" \
        CLAUDE_CONFIG_DIR="$T/cfg" timeout 60 bash "$SETUP" --check 2>/dev/null)"; rc=$?
 json="$(printf '%s' "$out" | tail -1)"
 [ "$rc" -ne 0 ] && ok "fresh machine: --check exits non-zero ($rc)" \
@@ -162,7 +168,7 @@ has_sub "fresh machine: manual_steps carries browser-ensure.sh --install" \
 T="$(newtmp)"; BIN="$T/bin"
 mkbin "$BIN" node git python3
 stub_gh_authed "$BIN"; stub_coderabbit_authed "$BIN"
-env PATH="$BIN" HOME="$T/home" ODOO_DEV_STATE_DIR="$T/state" \
+env PATH="$BIN" HOME="$T/home" ODOO_DEV_HOME="$T/state" \
     CLAUDE_CONFIG_DIR="$T/cfg" timeout 60 bash "$SETUP" --check >/dev/null 2>&1
 if [ ! -e "$T/state" ] && [ ! -e "$T/home" ]; then
   ok "--check creates neither the state dir nor HOME"
@@ -174,30 +180,42 @@ fi
 T="$(newtmp)"; BIN="$T/bin"
 mkbin "$BIN" node git python3
 stub_gh_authed "$BIN"; stub_coderabbit_authed "$BIN"; stub_mcp_config "$T/cfg"
+stub_odoo_dev "$BIN" 9.0.0
 run_setup() {
-  env PATH="$BIN" HOME="$T/home" ODOO_DEV_STATE_DIR="$T/state" \
+  env PATH="$BIN" HOME="$T/home" ODOO_DEV_HOME="$T/state" \
       CLAUDE_CONFIG_DIR="$T/cfg" timeout 60 bash "$SETUP" 2>/dev/null | tail -1
 }
-one="$(run_setup)"; two="$(run_setup)"
+# The state dir is the CLI's to create, never setup.sh's: a missing dir is
+# reported with the one command that makes it, and stays missing.
+one="$(run_setup)"
 assert_shape "first run" "$one"
-assert_shape "second run" "$two"
-has   "first run: state-dir reported in installed[]" "$(jarr "$one" installed)" state-dir
-if [ -f "$T/state/repo-map.json" ]; then
-  ok "first run: bootstrap-state.sh seeded $T/state"
+has     "first run: a missing state dir is named in missing[]" "$(jarr "$one" missing)" state-dir
+has_sub "first run: manual_steps carries odoo-dev doctor --migrate" \
+        "$(jarr "$one" manual_steps)" "odoo-dev doctor --migrate"
+if [ ! -e "$T/state" ]; then
+  ok "first run: setup.sh did not create the state dir"
 else
-  bad "first run: no repo-map.json under $T/state"
+  bad "first run: setup.sh created $T/state"
 fi
+mkdir -p "$T/state"
+two="$(run_setup)"; three="$(run_setup)"
+assert_shape "second run" "$two"
+hasnt "second run: an existing state dir is not reported missing" "$(jarr "$two" missing)" state-dir
+hasnt "second run: a version 9 odoo-dev is not reported missing" "$(jarr "$two" missing)" odoo-dev
 if [ -z "$(jarr "$two" installed)" ]; then
-  ok "second run: installed[] is empty — everything was already present"
+  ok "second run: installed[] is empty — nothing is installed for you"
 else
   bad "second run: installed[] is $(jarr "$two" installed | tr '\n' '|')"
 fi
-hasnt "second run: state-dir is not reported missing" "$(jarr "$two" missing)" state-dir
-if [ "$(jarr "$one" missing)" = "$(jarr "$two" missing)" ]; then
-  ok "second run: missing[] is unchanged from the first"
+if [ "$two" = "$three" ]; then
+  ok "third run: the JSON is unchanged from the second"
 else
-  bad "second run: missing[] changed between runs"
+  bad "third run: the JSON changed between runs"
 fi
+# An odoo-dev older than 9 is named, not tolerated.
+stub_odoo_dev "$BIN" 0.1.0
+four="$(run_setup)"
+has "old odoo-dev: odoo-dev named in missing[]" "$(jarr "$four" missing)" odoo-dev
 
 # --- 4. gh present but logged out ---------------------------------------------------
 # The assertion that matters as much as the name is that it comes back at all:
@@ -205,7 +223,7 @@ fi
 T="$(newtmp)"; BIN="$T/bin"
 mkbin "$BIN" node git python3
 stub_gh_loggedout "$BIN"; stub_coderabbit_authed "$BIN"; stub_mcp_config "$T/cfg"
-out="$(env PATH="$BIN" HOME="$T/home" ODOO_DEV_STATE_DIR="$T/state" \
+out="$(env PATH="$BIN" HOME="$T/home" ODOO_DEV_HOME="$T/state" \
        CLAUDE_CONFIG_DIR="$T/cfg" timeout 25 bash "$SETUP" --check 2>/dev/null)"; rc=$?
 json="$(printf '%s' "$out" | tail -1)"
 if [ "$rc" -eq 124 ]; then
@@ -222,7 +240,7 @@ has "logged out: manual_steps carries gh auth login"  "$(jarr "$json" manual_ste
 T="$(newtmp)"; BIN="$T/bin"
 mkbin "$BIN" git python3          # no node
 stub_gh_authed "$BIN"; stub_coderabbit_authed "$BIN"; stub_mcp_config "$T/cfg"
-out="$(env PATH="$BIN" HOME="$T/home" ODOO_DEV_STATE_DIR="$T/state" \
+out="$(env PATH="$BIN" HOME="$T/home" ODOO_DEV_HOME="$T/state" \
        CLAUDE_CONFIG_DIR="$T/cfg" timeout 60 bash "$SETUP" --check 2>/dev/null)"; rc=$?
 json="$(printf '%s' "$out" | tail -1)"
 [ "$rc" -ne 0 ] && ok "no node: exits non-zero" || bad "no node: exited 0"
@@ -233,7 +251,7 @@ has_sub "no node: manual_steps carries install guidance"  "$(jarr "$json" manual
 T="$(newtmp)"; BIN="$T/bin"
 mkbin "$BIN" node python3         # no git
 stub_gh_authed "$BIN"; stub_coderabbit_authed "$BIN"; stub_mcp_config "$T/cfg"
-out="$(env PATH="$BIN" HOME="$T/home" ODOO_DEV_STATE_DIR="$T/state" \
+out="$(env PATH="$BIN" HOME="$T/home" ODOO_DEV_HOME="$T/state" \
        CLAUDE_CONFIG_DIR="$T/cfg" timeout 60 bash "$SETUP" --check 2>/dev/null)"; rc=$?
 json="$(printf '%s' "$out" | tail -1)"
 [ "$rc" -ne 0 ] && ok "no git: exits non-zero" || bad "no git: exited 0"
@@ -247,7 +265,7 @@ has_sub "no git: manual_steps carries install guidance" "$(jarr "$json" manual_s
 T="$(newtmp)"; BIN="$T/bin"
 mkbin "$BIN" node git python3
 stub_gh_authed "$BIN"; stub_coderabbit_authed "$BIN"; stub_mcp_config "$T/cfg"
-out="$(env PATH="$BIN" HOME="$T/home" ODOO_DEV_STATE_DIR="$T/state" \
+out="$(env PATH="$BIN" HOME="$T/home" ODOO_DEV_HOME="$T/state" \
        CLAUDE_CONFIG_DIR="$T/cfg" timeout 60 bash "$SETUP" --check 2>/dev/null)"
 json="$(printf '%s' "$out" | tail -1)"
 assert_shape "in container" "$json"
@@ -268,29 +286,29 @@ hasnt "in container: the repos tree is not a failure"   "$miss" repos
 T="$(newtmp)"; BIN="$T/bin"
 mkbin "$BIN" node git python3
 stub_gh_authed "$BIN"; stub_coderabbit_authed "$BIN"; stub_mcp_config "$T/cfg"
-out="$(env -u ODOO_SDK_CONFIG -u ODOO_MODEL_IDS PATH="$BIN" HOME="$T/home" \
-       ODOO_DEV_STATE_DIR="$T/state" CLAUDE_CONFIG_DIR="$T/cfg" \
+out="$(env -u ODOO_MODEL_IDS PATH="$BIN" HOME="$T/home" \
+       ODOO_DEV_HOME="$T/state" CLAUDE_CONFIG_DIR="$T/cfg" \
        timeout 60 bash "$SETUP" --check 2>/dev/null)"
 json="$(printf '%s' "$out" | tail -1)"
 assert_shape "no sdk config" "$json"
 has     "no sdk config: sdk-model-ids named in missing[]" "$(jarr "$json" missing)" sdk-model-ids
 has_sub "no sdk config: manual_steps carries the get_models command" \
-        "$(jarr "$json" manual_steps)" "odoo-sdk cmd get_models --args"
+        "$(jarr "$json" manual_steps)" "odoo-dev cmd get_models --args"
 
-mkdir -p "$T/sdk"
+mkdir -p "$T/state"
 printf '[connection]\nurl = "https://x"\n\n[model_ids]\n"project.task" = 71\n' \
-  > "$T/sdk/config.toml"
-out="$(env -u ODOO_MODEL_IDS PATH="$BIN" HOME="$T/home" ODOO_DEV_STATE_DIR="$T/state" \
-       CLAUDE_CONFIG_DIR="$T/cfg" ODOO_SDK_CONFIG="$T/sdk" \
+  > "$T/state/config.toml"
+out="$(env -u ODOO_MODEL_IDS PATH="$BIN" HOME="$T/home" ODOO_DEV_HOME="$T/state" \
+       CLAUDE_CONFIG_DIR="$T/cfg" \
        timeout 60 bash "$SETUP" --check 2>/dev/null)"
 json="$(printf '%s' "$out" | tail -1)"
 assert_shape "sdk config with the entry" "$json"
 hasnt "sdk config with the entry: sdk-model-ids is not a failure" \
       "$(jarr "$json" missing)" sdk-model-ids
-if [ "$(cat "$T/sdk/config.toml")" = "$(printf '[connection]\nurl = "https://x"\n\n[model_ids]\n"project.task" = 71\n')" ]; then
+if [ "$(cat "$T/state/config.toml")" = "$(printf '[connection]\nurl = "https://x"\n\n[model_ids]\n"project.task" = 71\n')" ]; then
   ok "sdk config with the entry: the config file is read, never written"
 else
-  bad "sdk config with the entry: setup.sh modified $T/sdk/config.toml"
+  bad "sdk config with the entry: setup.sh modified $T/state/config.toml"
 fi
 
 # --- 8. usage --------------------------------------------------------------------------

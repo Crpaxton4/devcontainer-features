@@ -315,7 +315,6 @@ run_suite "module-classify.test.sh" "$HERE/tests/module-classify.test.sh"
 run_suite "repo-map.test.sh"       "$SKILLS/odoo-repo-map/scripts/tests/repo-map.test.sh"
 run_suite "existing-work.test.sh"  "$SKILLS/odoo-task-env/scripts/tests/existing-work.test.sh"
 run_suite "task-env.test.sh"       "$SKILLS/odoo-task-env/scripts/tests/task-env.test.sh"
-run_suite "task-tracking.test.sh"  "$SKILLS/odoo-task-env/scripts/tests/task-tracking.test.sh"
 run_suite "writeback.test.sh"      "$HERE/tests/writeback.test.sh"
 run_suite "run-tests.test.sh"      "$SKILLS/odoo-test-run/scripts/tests/run-tests.test.sh"
 run_suite "session-db.test.sh"     "$SKILLS/odoo-session-db/scripts/tests/session-db.test.sh"
@@ -442,6 +441,21 @@ while IFS= read -r f; do
 done < <(find "$ROOT" -name '*.sh' -type f | sort)
 [ "$synbad" -eq 0 ] && ok "every .sh parses"
 
+# --- 13b. hooks are wrappers over hooks/lib/*.js -----------------------------------
+# A hook answers in well under 100 ms, so it runs `node <file>` once: no inline
+# `node -e` program in a hook, and no Python (the interpreter alone costs more than
+# the budget). The logic lives in hooks/lib/*.js.
+gate "no inline node -e in hooks"
+inline="$(grep -rn "node -e" "$ROOT/hooks" 2>/dev/null || true)"
+if [ -z "$inline" ]; then ok "hooks hold no inline node program"; else
+  bad "inline node -e in a hook; move it to hooks/lib/*.js"; echo "$inline" | sed "s|^$ROOT/||" | sed 's/^/       /'
+fi
+gate "hooks call no python"
+py="$(grep -rnE "python3?\b" "$ROOT/hooks" 2>/dev/null || true)"
+if [ -z "$py" ]; then ok "hooks name no python"; else
+  bad "python in a hook"; echo "$py" | sed "s|^$ROOT/||" | sed 's/^/       /'
+fi
+
 # --- 14. no bare artifact.sh invocation -------------------------------------------
 # Every artifact write in the chain was once `command not found`: the bodies said
 # `artifact.sh put ...` and nothing puts scripts/ on PATH. An invocation is a line
@@ -472,9 +486,9 @@ const fs = require("fs"), path = require("path");
 const agentsDir = process.argv[1];
 
 // The handoff paths, which are the ones that actually get run. A body may name them
-// in prose without the sigil ("unless the machine sets ODOO_DEV_STATE_DIR"); what it
+// in prose without the sigil ("unless the machine sets ODOO_DEV_HOME"); what it
 // may not do is write one as something a shell has to expand.
-const HANDOFF = /\$\{?(ARTIFACT|ARTIFACTS|CLAUDE_PLUGIN_ROOT|ODOO_DEV_STATE_DIR)\b/;
+const HANDOFF = /\$\{?(ARTIFACT|ARTIFACTS|CLAUDE_PLUGIN_ROOT|ODOO_DEV_HOME)\b/;
 
 const teach = () => {
   console.log("       A subagent Bash call inherits no environment from the dispatcher and keeps");
@@ -664,8 +678,8 @@ process.exit(bad === 0 ? 0 : 1);
 # substitutes them the same way rather than exporting them, which makes the test
 # strictly harsher than the runtime.
 #
-# Everything runs against a scratch ODOO_DEV_STATE_DIR and a scratch HOME, including
-# one pass with ODOO_DEV_STATE_DIR unset so the `$HOME` default inside every
+# Everything runs against a scratch ODOO_DEV_HOME and a scratch HOME, including
+# one pass with ODOO_DEV_HOME unset so the `$HOME` default inside every
 # injection is exercised too. Afterwards the scratch tree must hold no directory
 # that a well-formed invocation could not have produced, which is how `tasks/Create`
 # gets caught. The last pass then feeds real arguments in, because an injection that
@@ -728,9 +742,9 @@ while IFS=$'\t' read -r cf cl craw; do
         *)       cmd="$(inj_render "$craw" "$v" "$v" "$v")" ;;
       esac
       if [ "$mode" = nostate ]; then
-        out="$(env -u ODOO_DEV_STATE_DIR HOME="$inj_root/home" bash -c "$cmd" </dev/null 2>&1)"
+        out="$(env -u ODOO_DEV_HOME HOME="$inj_root/home" bash -c "$cmd" </dev/null 2>&1)"
       else
-        out="$(env HOME="$inj_root/home" ODOO_DEV_STATE_DIR="$inj_root/state" \
+        out="$(env HOME="$inj_root/home" ODOO_DEV_HOME="$inj_root/state" \
                bash -c "$cmd" </dev/null 2>&1)"
       fi
       rc=$?
@@ -744,7 +758,7 @@ while IFS=$'\t' read -r cf cl craw; do
   done
 done < "$inj_list"
 
-inj_junk_found="$( { inj_junk "$inj_root/state"; inj_junk "$inj_root/home/.local/share/odoo-dev"; } | sort -u)"
+inj_junk_found="$( { inj_junk "$inj_root/state"; inj_junk "$inj_root/home/.config/odoo-dev"; } | sort -u)"
 
 # Real arguments, in their own scratch tree, so that deleting an injection or
 # writing one that can only ever emit its marker cannot pass this gate.
@@ -752,7 +766,7 @@ mkdir -p "$inj_root/live/tasks/30412" "$inj_root/livehome"
 while IFS=$'\t' read -r cf cl craw; do
   [ -n "${cf:-}" ] || continue
   cmd="$(inj_render "$craw" 30412 UAT main)"
-  out="$(env HOME="$inj_root/livehome" ODOO_DEV_STATE_DIR="$inj_root/live" \
+  out="$(env HOME="$inj_root/livehome" ODOO_DEV_HOME="$inj_root/live" \
          bash -c "$cmd" </dev/null 2>&1)"
   rc=$?
   [ "$rc" -eq 0 ] || inj_report="$inj_report

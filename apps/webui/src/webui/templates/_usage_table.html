@@ -1,0 +1,12 @@
+<div id="usage-table">
+{% if items %}
+  <table>
+    <tr><th>kind</th><th>name</th><th>count</th><th>last used</th></tr>
+    {% for r in items %}
+    <tr><td>{{ r.kind }}</td><td>{{ r.name }}</td><td>{{ r.count }}</td><td>{{ r.last_used }}</td></tr>
+    {% endfor %}
+  </table>
+{% else %}
+  <p class="empty">No usage line in the last {{ days }} days.</p>
+{% endif %}
+</div>

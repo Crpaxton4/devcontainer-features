@@ -3,7 +3,7 @@
 # evidence a PR gate can trust.
 #
 # Usage: run-tests.sh <repo> <task_id> <module> [--test-tags T|all] [--db-suffix S]
-#                     [--with-tours] [--repo-path DIR] [--addons-path P]
+#                     [--with-tours] [--repo-root DIR] [--addons-path P]
 #                     [--data-dir DIR] [--target-series NN.0] [--odoo-bin PATH]
 #                     [--odoo-conf PATH] [--put ARTIFACTS_DIR]
 #
@@ -39,7 +39,7 @@
 #
 # Mechanics:
 #   - addons path STATED, never inherited: the custom root FIRST (task worktree,
-#     else --repo-path holding the module, else the addons base holding it, else
+#     else --repo-root holding the module, else the addons base holding it, else
 #     exit 2; reported as addons_root) so its modules shadow the originals, then the core addons directories resolved from the
 #     RUNNING Odoo (odoo.__file__). addons_path is deliberately NOT read from
 #     odoo.conf — one unrelated broken tree in the ambient config aborts registry
@@ -124,11 +124,12 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLUGIN_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+JSON_GET="$PLUGIN_ROOT/scripts/json-get.sh"
 
-[ $# -ge 3 ] || { echo "usage: run-tests.sh <repo> <task_id> <module> [--test-tags T|all (default /<module>)] [--db-suffix S] [--with-tours] [--repo-path DIR] [--addons-path P] [--data-dir DIR] [--target-series NN.0] [--odoo-bin PATH] [--odoo-conf PATH] [--put ARTIFACTS_DIR]" >&2; exit 2; }
+[ $# -ge 3 ] || { echo "usage: run-tests.sh <repo> <task_id> <module> [--test-tags T|all (default /<module>)] [--db-suffix S] [--with-tours] [--repo-root DIR] [--addons-path P] [--data-dir DIR] [--target-series NN.0] [--odoo-bin PATH] [--odoo-conf PATH] [--put ARTIFACTS_DIR]" >&2; exit 2; }
 repo="$1"; task_id="$2"; module="$3"; shift 3
 
-tags=""; suffix=""; with_tours=false; repo_path=""; addons_override=""; data_dir_override=""
+tags=""; suffix=""; with_tours=false; repo_root=""; addons_override=""; data_dir_override=""
 target_series=""; put_dir=""; odoo_bin=""; odoo_conf=""
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -137,7 +138,7 @@ while [ $# -gt 0 ]; do
     --odoo-bin) odoo_bin="${2:?}"; shift 2 ;;
     --odoo-conf) odoo_conf="${2:?}"; shift 2 ;;
     --db-suffix) suffix="${2:?}"; shift 2 ;;
-    --repo-path) repo_path="${2:?}"; shift 2 ;;
+    --repo-root) repo_root="${2:?}"; shift 2 ;;
     --addons-path) addons_override="${2:?}"; shift 2 ;;
     --data-dir) data_dir_override="${2:?}"; shift 2 ;;
     --put) put_dir="${2:?}"; shift 2 ;;
@@ -285,9 +286,9 @@ if [ -n "$target_major" ] && [ "$target_major" != "$major" ]; then
   # a reader never has to branch on which path wrote the artifact; the offline
   # suite asserts the two key sets are identical. Nothing ran, so every count is 0
   # and the paths a run would have stated are null rather than invented.
-  mismatch_json="$(node -e '
-    const [db, module_, version, target, mode, err, bin] = process.argv.slice(1);
-    console.log(JSON.stringify({
+  mismatch_json="$("$JSON_GET" '(() => {
+    const { db, module_, version, target, mode, err, bin } = a;
+    return {
       passed: false, status: "series_mismatch", error: err,
       db, module: module_,
       odoo_version: version, odoo_bin: bin, module_target_series: target, mode,
@@ -299,8 +300,9 @@ if [ -n "$target_major" ] && [ "$target_major" != "$major" ]; then
       failures: [{ test: module_ + ": Odoo series mismatch", error: err }],
       log_file: null, log_excerpt: "",
       db_dropped: false,
-    }));
-  ' "$dbname" "$module" "$version_raw" "$target_series" "$mode" "$mismatch_error" "$odoo_bin")"
+    };
+  })()' db="$dbname" module_="$module" version="$version_raw" target="$target_series" mode="$mode" \
+    err="$mismatch_error" bin="$odoo_bin" <<<'{}')"
   emit "$mismatch_json"
   exit 0  # a series mismatch is a RESULT, like a test failure
 fi
@@ -352,17 +354,17 @@ print(",".join(out))'
   # The custom addons root (#1171), first match wins, probed with odoo_run so a
   # host-mode run asks the container and not the host:
   #   1. the task worktree  $WORKTREE_ADDONS_BASE/$WORKTREE_SUBDIR/task-<id>
-  #   2. --repo-path DIR, when DIR/<module> exists
+  #   2. --repo-root DIR, when DIR/<module> exists
   #   3. $WORKTREE_ADDONS_BASE, when $WORKTREE_ADDONS_BASE/<module> exists
   # None of them: exit 2, because a path that holds no module installs nothing.
   if odoo_run test -d "$worktree_addons"; then
     addons_root="$worktree_addons"
-  elif [ -n "$repo_path" ] && odoo_run test -d "$repo_path/$module"; then
-    addons_root="$repo_path"
+  elif [ -n "$repo_root" ] && odoo_run test -d "$repo_root/$module"; then
+    addons_root="$repo_root"
   elif odoo_run test -d "$WORKTREE_ADDONS_BASE/$module"; then
     addons_root="$WORKTREE_ADDONS_BASE"
   else
-    echo "no custom addons root holds module $module. Looked at: (1) $worktree_addons, (2) --repo-path ${repo_path:-<not given>}/$module, (3) $WORKTREE_ADDONS_BASE/$module, (4) --addons-path <not given>. Pass --addons-path or --repo-path." >&2
+    echo "no custom addons root holds module $module. Looked at: (1) $worktree_addons, (2) --repo-root ${repo_root:-<not given>}/$module, (3) $WORKTREE_ADDONS_BASE/$module, (4) --addons-path <not given>. Pass --addons-path or --repo-root." >&2
     exit 2
   fi
   addons="${addons_root},${core_addons}"
@@ -386,7 +388,7 @@ fi
 # fact about the code rather than a fact about the log.
 tours_declared=0
 module_src=""
-for base in "$repo_path" "$worktree_addons" "$WORKTREE_ADDONS_BASE"; do
+for base in "$repo_root" "$worktree_addons" "$WORKTREE_ADDONS_BASE"; do
   [ -n "$base" ] || continue
   if [ -d "$base/$module" ]; then module_src="$base/$module"; break; fi
   if [ -d "$base/$WORKTREE_SUBDIR/task-${task_id}/$module" ]; then
@@ -424,7 +426,7 @@ if [ "$with_tours" = true ]; then
     echo "--with-tours was requested but no usable browser is available (see above). Refusing to run: Odoo would SKIP every tour and report the suite as green." >&2
     exit 6
   }
-  browser_bin="$(node -e 'console.log(JSON.parse(process.argv[1]).browser_bin)' "$browser_json")"
+  browser_bin="$("$JSON_GET" d.browser_bin <<<"$browser_json")"
   browser_env="ODOO_BROWSER_BIN=$browser_bin"
 fi
 
@@ -614,13 +616,14 @@ fi
 cleanup
 trap - EXIT
 
-result_json="$(node -e '
-  const fs = require("fs");
-  const [logFile, passed, dbname, module_, version, dropped, testsRun,
-         toursDeclared, toursRun, toursPassed, tourGap, mode, status,
-         registryError, addonsPath, dataDir, targetSeries, odooBin,
-         addonsRoot, enterpriseAddons] = process.argv.slice(1);
-  const text = fs.readFileSync(logFile, "utf8");
+# The log can be megabytes, far past the argument size limit, so the expression
+# reads it from its path rather than receiving it as an operand.
+result_json="$("$JSON_GET" '(() => {
+  const { logFile, passed, dbname, module_, version, dropped, testsRun,
+          toursDeclared, toursRun, toursPassed, tourGap, mode, status,
+          registryError, addonsPath, dataDir, targetSeries, odooBin,
+          addonsRoot, enterpriseAddons } = a;
+  const text = require("fs").readFileSync(logFile, "utf8");
   const lines = text.split("\n");
 
   // Odoo prefixes every log RECORD with a timestamp; the continuation lines of a
@@ -714,7 +717,7 @@ result_json="$(node -e '
   const suites = [...suiteMap.values()].sort((a, b) => a.module.localeCompare(b.module));
 
   const excerpt = lines.slice(-50).join("\n");
-  console.log(JSON.stringify({
+  return {
     passed: passed === "true", status,
     error: status === "registry_aborted" ? (registryError || "").trim().slice(0, 300) || null : null,
     db: dbname, module: module_,
@@ -736,11 +739,12 @@ result_json="$(node -e '
     tours_passed: Number(toursPassed) || 0,
     failures, log_file: logFile, log_excerpt: excerpt,
     db_dropped: dropped === "true",
-  }));
-' "$log" "$passed" "$dbname" "$module" "$version_raw" "$db_dropped" "$tests_run" \
-  "$tours_declared" "$tours_run" "$tours_passed" "$tour_gap" "$mode" "$status" \
-  "$registry_error" "$addons" "$data_dir" "$target_series" "$odoo_bin" \
-  "$addons_root" "$enterprise_addons")"
+  };
+})()' logFile="$log" passed="$passed" dbname="$dbname" module_="$module" version="$version_raw" \
+  dropped="$db_dropped" testsRun="$tests_run" toursDeclared="$tours_declared" toursRun="$tours_run" \
+  toursPassed="$tours_passed" tourGap="$tour_gap" mode="$mode" status="$status" \
+  registryError="$registry_error" addonsPath="$addons" dataDir="$data_dir" targetSeries="$target_series" \
+  odooBin="$odoo_bin" addonsRoot="$addons_root" enterpriseAddons="$enterprise_addons" <<<'{}')"
 emit "$result_json"
 
 [ "$passed" = true ] || exit 0  # a test failure is a RESULT, not a script error

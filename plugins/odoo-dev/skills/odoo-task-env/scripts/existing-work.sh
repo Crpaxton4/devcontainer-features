@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # existing-work.sh — discover prior work for a task, deterministically.
 #
-# Usage: existing-work.sh <repo> <task_id> <default_branch> [--repo-path DIR]
+# Usage: existing-work.sh <repo> <task_id> <base_branch> [--repo-root DIR]
 #
 # Why: the pipeline used to probe exactly one ref, refs/heads/<id>-<slug> — the only
 # name the automation itself ever creates. Humans push <id>#<slug>, so five commits
@@ -18,16 +18,9 @@
 # so a MERGED pull request whose branch was deleted afterwards still proves the work
 # landed — which is the whole point of asking GitHub as well as git.
 #
-# odoo-sdk is best-effort the same way: `odoo-sdk cmd task_status` lists the active
-# local tracking sessions (the command takes no kwargs — it returns every active
-# run, and this script filters to <task_id> here), reported as "tracking". A missing
-# or failing CLI degrades to "tracking": [] plus a "tracking_error" string and is
-# never fatal. "tracking": [] with a non-null "tracking_error" means UNKNOWN, not
-# "no session" — say so in the report rather than treating it as proof.
-#
 # Last stdout line: {"state", "branch", "candidates": [...], "prs": [...],
-#                    "gh_error", "tracking": [...], "tracking_error"}
-#   complete   a candidate is merged into <default_branch>, or a PR is MERGED
+#                    "gh_error"}
+#   complete   a candidate is merged into <base_branch>, or a PR is MERGED
 #   resume     exactly one unmerged candidate — continue on "branch"
 #   ambiguous  two or more unmerged candidates — a human picks
 #   none       no candidate — start fresh
@@ -36,12 +29,12 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$SCRIPT_DIR/_common.sh"
 
-[ $# -ge 3 ] || { echo "usage: existing-work.sh <repo> <task_id> <default_branch> [--repo-path DIR]" >&2; exit 2; }
-repo="$1"; task_id="$2"; default_branch="$3"; shift 3
-repo_path=""
+[ $# -ge 3 ] || { echo "usage: existing-work.sh <repo> <task_id> <base_branch> [--repo-root DIR]" >&2; exit 2; }
+repo="$1"; task_id="$2"; base_branch="$3"; shift 3
+repo_root=""
 while [ $# -gt 0 ]; do
   case "$1" in
-    --repo-path) repo_path="${2:?}"; shift 2 ;;
+    --repo-root) repo_root="${2:?}"; shift 2 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
 done
@@ -51,24 +44,30 @@ done
 case "$task_id" in
   ''|*[!0-9]*) echo "task_id must be numeric: $task_id" >&2; exit 2 ;;
 esac
-[ -n "$default_branch" ] || { echo "default_branch must not be empty" >&2; exit 2; }
 
-repo_dir="$(resolve_repo_dir "$repo" "$repo_path")" || exit 2
+repo_dir="$(resolve_repo_dir "$repo" "$repo_root")" || exit 2
 
 # Refreshes remote-tracking refs only. A repo with no reachable origin still reports
 # on what is local, because an offline answer beats no answer at the triage gate.
 git -C "$repo_dir" fetch --quiet origin 2>/dev/null \
   || echo "WARN could not fetch origin — reporting on local refs only" >&2
 
+# An empty base_branch is what project-resolve.sh prints when no branch of the flow
+# exists on origin: warn and measure against origin/HEAD.
 base_ref=""
-for candidate_base in "refs/remotes/origin/$default_branch" "refs/heads/$default_branch"; do
-  if git -C "$repo_dir" show-ref --verify --quiet "$candidate_base"; then
-    base_ref="$candidate_base"
-    break
-  fi
-done
+if [ -z "$base_branch" ]; then
+  echo "WARN base_branch is empty (no branch of the flow exists on origin): using origin/HEAD" >&2
+  git -C "$repo_dir" show-ref --verify --quiet refs/remotes/origin/HEAD && base_ref="refs/remotes/origin/HEAD"
+else
+  for candidate_base in "refs/remotes/origin/$base_branch" "refs/heads/$base_branch"; do
+    if git -C "$repo_dir" show-ref --verify --quiet "$candidate_base"; then
+      base_ref="$candidate_base"
+      break
+    fi
+  done
+fi
 [ -n "$base_ref" ] || {
-  echo "default branch '$default_branch' exists neither on origin nor locally in $repo_dir" >&2
+  echo "base branch '${base_branch:-origin/HEAD}' exists neither on origin nor locally in $repo_dir" >&2
   exit 2
 }
 
@@ -139,34 +138,9 @@ else
   rm -f "$gh_stderr"
 fi
 
-# Local tracking-session state, mirroring the gh degrade pattern above: a missing
-# or failing CLI is a string, never a fatal error. task_status takes no kwargs (it
-# lists every active run), so the task filter happens client-side in node below.
-tracking_error=""
-tracking_json="[]"
-if [ "${ODOO_TASK_TRACKING:-1}" = "0" ]; then
-  tracking_error="tracking probe disabled (ODOO_TASK_TRACKING=0) — tracking state unknown"
-elif ! command -v odoo-sdk >/dev/null 2>&1; then
-  tracking_error="odoo-sdk is not installed — tracking state unknown"
-else
-  ts_stderr="$(mktemp "${TMPDIR:-/tmp}/existing-work-sdk.XXXXXX")"
-  if ! tracking_json="$(odoo-sdk cmd task_status 2>"$ts_stderr")"; then
-    # On failure the CLI puts its JSON error envelope on stdout; prefer that,
-    # fall back to stderr for a crash that never reached the envelope.
-    tracking_error="${tracking_json:-$(head -c 400 "$ts_stderr")}"
-    [ -n "$tracking_error" ] || tracking_error="odoo-sdk cmd task_status failed — tracking state unknown"
-    tracking_json="[]"
-  fi
-  rm -f "$ts_stderr"
-fi
-
-node -e '
-  const fs = require("fs");
-  const [taskId, prsRaw, ghErrorIn, trackingRaw, trackingErrorIn] = process.argv.slice(1);
-  let ghError = ghErrorIn;
-  let trackingError = trackingErrorIn;
-
-  const tsv = fs.readFileSync(0, "utf8").trim();
+# json-get.sh binds name=value operands to `a`; the JSON on stdin is unused here.
+"$SCRIPT_DIR/../../../scripts/json-get.sh" '(() => {
+  const tsv = a.tsv.trim();
   const candidates = tsv === "" ? [] : tsv.split("\n").map((line) => {
     const [branch, tip, lastCommitDate, merged, commits, hasLocal] = line.split("\t");
     return {
@@ -181,25 +155,14 @@ node -e '
 
   // Same <id>[#-] shape the ref scan used, so a merged PR whose branch was deleted
   // after the merge still counts as proof that the work landed.
-  const headPattern = new RegExp("^" + taskId + "([#-]|$)");
+  const headPattern = new RegExp("^" + a.task_id + "([#-]|$)");
+  let ghError = a.gh_error;
   let prs = [];
   try {
-    prs = JSON.parse(prsRaw).filter((pr) => headPattern.test(pr.headRefName ?? ""));
+    prs = JSON.parse(a.prs).filter((pr) => headPattern.test(pr.headRefName ?? ""));
   } catch (error) {
     prs = [];
     ghError = ghError === "" ? "unparseable gh output: " + error.message : ghError;
-  }
-
-  // Active local tracking sessions for THIS task. task_status returns every
-  // active run; the filter to one task happens here. Unparseable output joins
-  // the degrade path rather than crashing the triage.
-  let tracking = [];
-  try {
-    tracking = JSON.parse(trackingRaw).filter((run) => run.task_id === Number(taskId));
-  } catch (error) {
-    tracking = [];
-    trackingError = trackingError === ""
-      ? "unparseable odoo-sdk output: " + error.message : trackingError;
   }
 
   const unmerged = candidates.filter((candidate) => !candidate.merged);
@@ -215,13 +178,11 @@ node -e '
     state = "ambiguous";
   }
 
-  console.log(JSON.stringify({
+  return {
     state: state,
     branch: branch,
     candidates: candidates,
     prs: prs,
     gh_error: ghError === "" ? null : ghError,
-    tracking: tracking,
-    tracking_error: trackingError === "" ? null : trackingError,
-  }));
-' "$task_id" "$prs_json" "$gh_error" "$tracking_json" "$tracking_error" <<<"$candidates_tsv"
+  };
+})()' task_id="$task_id" prs="$prs_json" gh_error="$gh_error" tsv="$candidates_tsv" <<<'{}'

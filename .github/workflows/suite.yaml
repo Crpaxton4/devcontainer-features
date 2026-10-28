@@ -1,0 +1,74 @@
+# One matrix workflow over the uv workspace members. It replaces the
+# per-package quality, dispatcher, usage-log and webui workflows.
+# Each member runs tests, black and complexipy; one root job runs import-linter.
+name: "CI - suite"
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "libraries/**"
+      - "apps/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/suite.yaml"
+  pull_request:
+    paths:
+      - "libraries/**"
+      - "apps/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/suite.yaml"
+  workflow_dispatch:
+
+jobs:
+  member:
+    name: "${{ matrix.name }}"
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: odoo_client
+            dir: libraries/odoo_client
+          - name: odoo_dev_data
+            dir: libraries/odoo_dev_data
+          - name: odoo_dev_core
+            dir: libraries/odoo_dev_core
+          - name: dispatcher
+            dir: libraries/dispatcher
+          - name: usage_log
+            dir: libraries/usage_log
+          - name: odoo_cli
+            dir: apps/odoo_cli
+          - name: odoo_mcp
+            dir: apps/odoo_mcp
+          - name: odoo_tui
+            dir: apps/odoo_tui
+          - name: webui
+            dir: apps/webui
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.13"
+          enable-cache: true
+      - run: uv lock --check
+      - run: uv sync --all-packages --group dev
+      - run: uv run --package ${{ matrix.name }} pytest ${{ matrix.dir }}/tests -q
+      - run: uv run black --check ${{ matrix.dir }}
+      - run: uv run complexipy ${{ matrix.dir }}/src
+
+  imports:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.13"
+          enable-cache: true
+      - run: uv sync --all-packages --group dev
+      - run: uv run lint-imports
+      - name: Layer contract of odoo_client
+        working-directory: libraries/odoo_client
+        run: uv run lint-imports
