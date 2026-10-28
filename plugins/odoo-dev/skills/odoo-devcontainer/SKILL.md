@@ -1,6 +1,7 @@
 ---
 name: odoo-devcontainer
 description: "Working reference for this Odoo devcontainer: paths, odoo-bin, odoo.conf, the ORM, security, views and XPath, controllers, QWeb, OWL assets, tests and tours, commit conventions. Use whenever Odoo module code is written, read, run, or debugged here."
+allowed-tools: Bash(echo "${ODOO_VERSION:-not set}")
 ---
 
 # Odoo Dev Env Guide
