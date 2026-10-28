@@ -13,6 +13,7 @@ import json
 import os
 import sqlite3
 import sys
+import time
 from datetime import datetime, timezone
 from typing import Any, Iterable, Mapping
 
@@ -97,12 +98,25 @@ def _write(directory: str, filename: str, schema: tuple, sql: str, rows: list) -
 
 
 def _safely(what: str, directory: str, *args: Any) -> bool:
-    try:
-        _write(directory, *args)
-    except (sqlite3.Error, OSError, ValueError) as exc:
-        print(f"usage-log: dropped {what}: {exc}", file=sys.stderr)
-        return False
-    return True
+    deadline = time.monotonic() + BUSY_TIMEOUT_MS / 1000
+    while True:
+        try:
+            _write(directory, *args)
+            return True
+        except (sqlite3.Error, OSError, ValueError) as exc:
+            # SQLite skips the busy handler when a lock promotion could deadlock
+            # (two fresh connections both switching the new file to WAL) and
+            # returns "database is locked" at once; the retry is the documented
+            # answer, bounded by the same timeout the busy handler would use.
+            if _is_locked(exc) and time.monotonic() < deadline:
+                time.sleep(0.01)
+                continue
+            print(f"usage-log: dropped {what}: {exc}", file=sys.stderr)
+            return False
+
+
+def _is_locked(exc: BaseException) -> bool:
+    return isinstance(exc, sqlite3.OperationalError) and "locked" in str(exc)
 
 
 def record(kind: str, name: str, /, **context: Any) -> bool:
