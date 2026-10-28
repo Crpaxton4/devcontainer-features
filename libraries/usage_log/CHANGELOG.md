@@ -1,5 +1,12 @@
 # Changelog
 
+## [9.2.0](https://github.com/Crpaxton4/devcontainer-features/compare/usage_log-v9.1.0...usage_log-v9.2.0) (2026-10-28)
+
+
+### Miscellaneous Chores
+
+* **usage_log:** Synchronize odoo-dev-suite versions
+
 ## [9.1.0](https://github.com/Crpaxton4/devcontainer-features/compare/usage_log-v9.0.0...usage_log-v9.1.0) (2026-10-28)
 
 
