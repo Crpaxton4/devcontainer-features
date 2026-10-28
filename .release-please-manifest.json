@@ -11,6 +11,6 @@
     "apps/odoo_mcp": "9.2.0",
     "apps/odoo_tui": "9.2.0",
     "apps/webui": "9.2.0",
-    "plugins/odoo-dev": "6.0.0",
+    "plugins/odoo-dev": "6.0.1",
     "plugins/odoo-orchestrator": "1.2.0"
 }

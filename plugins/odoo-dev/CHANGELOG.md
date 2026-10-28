@@ -1,5 +1,12 @@
 # Changelog
 
+## [6.0.1](https://github.com/Crpaxton4/devcontainer-features/compare/odoo-dev-plugin-v6.0.0...odoo-dev-plugin-v6.0.1) (2026-10-28)
+
+
+### Bug Fixes
+
+* **odoo-dev:** allow the odoo-devcontainer series line so dontAsk runs can expand it ([#1284](https://github.com/Crpaxton4/devcontainer-features/issues/1284)) ([b06031c](https://github.com/Crpaxton4/devcontainer-features/commit/b06031ccc1ae55e2d2863c1bdb67fb534b1c36bf))
+
 ## [6.0.0](https://github.com/Crpaxton4/devcontainer-features/compare/odoo-dev-plugin-v5.0.0...odoo-dev-plugin-v6.0.0) (2026-10-28)
 
 
