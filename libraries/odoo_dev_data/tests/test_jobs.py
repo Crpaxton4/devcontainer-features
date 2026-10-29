@@ -1,6 +1,7 @@
 """Tests for ``JobStore`` on ``state.db``: lifecycle, the duplicate gate, the
 absorbed run, bundle and orchestrator columns, and the report/window queries."""
 
+import json
 import re
 import sqlite3
 import threading
@@ -575,6 +576,28 @@ def test_handled_and_reported_marks_are_independent(jobs):
     jobs.mark_reported(["j2"], now_us=T0 + 11)
     assert jobs.get("j1").reported_us is None
     assert jobs.get("j2").handled_us is None
+
+
+def test_save_answers_stores_a_json_list_on_a_done_job(jobs):
+    run_to_done(jobs)
+    assert jobs.get("j1").answers is None
+    given = [{"question": "q?", "accepted": False, "answer": "yes"}]
+    assert json.loads(jobs.save_answers("j1", given).answers) == given
+    assert json.loads(jobs.save_answers("j1", []).answers) == []
+
+
+def test_save_answers_requires_a_done_job(jobs):
+    submit(jobs)
+    with pytest.raises(InvalidJobTransitionError):
+        jobs.save_answers("j1", [])  # PENDING
+    with pytest.raises(InvalidJobTransitionError):
+        jobs.save_answers("nope", [])
+
+
+def test_the_answers_column_rejects_invalid_json(jobs):
+    run_to_done(jobs)
+    with pytest.raises(sqlite3.IntegrityError):
+        jobs._conn.execute("UPDATE jobs SET answers='{not json' WHERE job_id='j1'")
 
 
 def test_mark_friction_recorded_is_idempotent(jobs):

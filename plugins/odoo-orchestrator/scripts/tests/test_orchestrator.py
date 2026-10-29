@@ -265,6 +265,28 @@ class Reports(Base):
                 self.assertEqual(self.run_main(verb, bad)[0], 2, (verb, bad))
 
 
+class Answers(Base):
+    def test_no_saved_answers_prints_a_line_and_exits_1(self):
+        self.submit("j1", "1")
+        self.finish("j1")
+        code, out, _ = self.run_main("answers", "j1")
+        self.assertEqual((code, out.strip()), (1, "no answers"))
+
+    def test_saved_answers_print_as_json(self):
+        self.submit("j1", "1")
+        self.finish("j1")
+        given = [{"question": "q?", "accepted": False, "answer": "yes"}]
+        with JobStore(home=self.home) as store:
+            store.save_answers("j1", given)
+        code, out, _ = self.run_main("answers", "j1")
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out), given)
+
+    def test_unknown_job_or_wrong_arity_is_exit_2(self):
+        self.assertEqual(self.run_main("answers", "nope")[0], 2)
+        self.assertEqual(self.run_main("answers")[0], 2)
+
+
 class Batches(Base):
     def test_batch_is_listed_when_finished_until_done(self):
         self.submit("a", "1", batch=A)

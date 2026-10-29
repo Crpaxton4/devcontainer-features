@@ -1,4 +1,4 @@
-"""A read-only local web interface. One Flask app, one blueprint per page group.
+"""A local web interface, read-only except for answers to job questions. One Flask app, one blueprint per page group.
 
 To add a page group: write a module with a ``bp = Blueprint(...)`` and add one
 line to ``PAGES`` below. ``PAGES`` is the only registration point. It also

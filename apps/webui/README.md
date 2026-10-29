@@ -1,9 +1,10 @@
 # webui
 
-A read-only local web interface for the dispatcher (UI layer). It is one Flask
+A read-only local web interface for the dispatcher (UI layer), read-only except
+for answers to job questions. It is one Flask
 app (`webui.create_app`). `python -m webui` serves it on `0.0.0.0:8765`. The
-compose stack publishes that port on `127.0.0.1` only. The pages have no write
-route and open SQLite with `mode=ro`.
+compose stack publishes that port on `127.0.0.1` only. The only write route is
+`POST /jobs/<job_id>/answers`. The other pages open SQLite with `mode=ro`.
 
 ## Pages
 

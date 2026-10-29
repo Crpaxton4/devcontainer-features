@@ -12,6 +12,7 @@
     records <batch_id>          print the batch as a table
     batches                     print the finished batches not yet reported
     batch-done <batch_id>       mark every job of a batch reported (not handled)
+    answers <job_id>            print the answers saved in the web UI as JSON; exit 1 if none
 
 The state root is ``$ODOO_DEV_HOME`` (``odoo_dev_data.home.resolve_home``). Briefs
 live under ``tasks/<task>/``; handled, friction and reported marks are separate
@@ -188,6 +189,17 @@ def batch_done(batch_id: str) -> None:
     )
 
 
+def answers(job_id: str) -> int:
+    """Print the answers saved in the web UI as JSON, or exit 1 when there are none."""
+    with JobStore(home=resolve_home()) as store:
+        saved = store.get(job_id).answers
+    if saved is None:
+        print("no answers")
+        return 1
+    print(json.dumps(json.loads(saved), indent=2))
+    return 0
+
+
 def approve_jobs(job_ids: list[str]) -> None:
     with JobStore(home=resolve_home()) as store:
         for job_id in job_ids:
@@ -227,6 +239,7 @@ VERBS = {
         lambda: print("\n".join(reporting.batches_pending_report(resolve_home()))),
     ),
     "batch-done": (1, batch_done),
+    "answers": (1, answers),
 }
 
 

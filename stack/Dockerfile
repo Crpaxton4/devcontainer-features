@@ -4,7 +4,7 @@
 #   dispatcher the dispatcher plus the tools it runs: devcontainer CLI, docker
 #              CLI with the compose plugin, git and gh. It has no ENTRYPOINT,
 #              so a service chooses its own command.
-#   webui      the read-only web interface. Flask and the dispatcher library: no
+#   webui      the web interface (read-only except for answers). Flask and the dispatcher library: no
 #              Node, docker or devcontainer CLI.
 
 ARG PYTHON_VERSION=3.12
