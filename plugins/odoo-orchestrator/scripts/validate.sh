@@ -59,6 +59,21 @@ for code in $codes; do
     fi
 done
 
+gate "skills have valid frontmatter"
+for skill in "$ROOT"/skills/*/SKILL.md; do
+    dir=$(basename "$(dirname "$skill")")
+    front=$(awk 'NR == 1 && $0 != "---" { exit } NR > 1 && $0 == "---" { exit } NR > 1' "$skill")
+    desc=$(printf '%s\n' "$front" | sed -n 's/^description: *//p' | tr -d '"')
+    if [ "$(head -n1 "$skill")" = "---" ] &&
+        printf '%s\n' "$front" | grep -qx "name: $dir" &&
+        [ -n "$desc" ] && [ "${#desc}" -le 300 ] &&
+        ! printf '%s\n' "$front" | grep -q '^when_to_use:'; then
+        ok "$dir"
+    else
+        bad "$dir: needs --- frontmatter, name: $dir, description of 1-300 characters, no when_to_use"
+    fi
+done
+
 gate "helper unit tests"
 # orchestrator.py imports odoo_dev_data and dispatcher, so the tests run in the workspace environment.
 if uv run --project "$ROOT/../.." --package dispatcher python -m unittest discover -s "$ROOT/scripts/tests" -t "$ROOT/scripts/tests"; then ok "unittest"; else bad "unittest"; fi
