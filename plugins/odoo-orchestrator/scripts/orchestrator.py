@@ -29,6 +29,7 @@ from pathlib import Path
 from dispatcher import reporting
 from odoo_dev_data.home import resolve_home
 from odoo_dev_data.jobs import InvalidJobTransitionError, JobStore
+from odoo_dev_data.migrate import LEGACY_BATCH
 from odoo_dev_data.tasks import (
     append_friction,
     approve_draft,
@@ -89,8 +90,10 @@ def _check_task(task: str) -> None:
 
 
 def _check_batch(batch_id: str) -> None:
-    if not BATCH_ID.match(batch_id):
-        raise ValueError(f"batch id must be 32 hex digits: {batch_id!r}")
+    if batch_id != LEGACY_BATCH and not BATCH_ID.match(batch_id):
+        raise ValueError(
+            f"batch id must be 32 hex digits or {LEGACY_BATCH!r}: {batch_id!r}"
+        )
 
 
 def approved_brief(task: str) -> str:
