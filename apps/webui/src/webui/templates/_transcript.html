@@ -1,0 +1,7 @@
+{% if lines %}
+<pre class="transcript">{% for line in lines %}{{ line }}
+
+{% endfor %}</pre>
+{% else %}
+<p class="empty">Waiting for the session transcript.</p>
+{% endif %}

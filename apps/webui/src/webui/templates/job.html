@@ -1,6 +1,8 @@
 {% extends "base.html" %}
 {% block title %}Job {{ entry.job_id }}{% endblock %}
 {% block content %}
+<div class="cols">
+<div>
 <h1>Job {{ entry.job_id }}</h1>
 <table>
   {% for key, value in entry.items() %}
@@ -25,4 +27,13 @@
 {% else %}
 <p class="empty">No bundle file exists for this job.</p>
 {% endif %}
+</div>
+<aside>
+  <h2>Live session</h2>
+  <div hx-get="{{ url_for('jobs.transcript', job_id=entry.job_id) }}"
+       hx-trigger="{{ 'load, every 2s' if entry.state == 'RUNNING' else 'load' }}"
+       hx-swap="innerHTML"
+       hx-on::after-swap="const p = this.querySelector('pre'); if (p) p.scrollTop = p.scrollHeight"></div>
+</aside>
+</div>
 {% endblock %}

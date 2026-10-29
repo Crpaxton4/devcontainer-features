@@ -6,6 +6,7 @@ rows through these functions. Nothing here writes a job row: each call opens
 ``usage.db`` is opened read-only (``mode=ro``).
 """
 
+import os
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -19,6 +20,20 @@ from odoo_dev_data.tasks import read_task
 def state_home(env: Mapping[str, str] | None = None) -> Path:
     """The state root: ``$ODOO_DEV_HOME`` or the default."""
     return resolve_home(env)
+
+
+def claude_home(env: Mapping[str, str] | None = None) -> Path:
+    """The Claude home: ``$DISPATCH_CLAUDE_HOME``, ``$CLAUDE_CONFIG_DIR`` or ``~/.claude``."""
+    env = os.environ if env is None else env
+    found = env.get("DISPATCH_CLAUDE_HOME") or env.get("CLAUDE_CONFIG_DIR")
+    return Path(found) if found else Path.home() / ".claude"
+
+
+def transcript_path(home: Path, session_id: str) -> Path | None:
+    """The session transcript under ``<home>/projects``, or None."""
+    if not session_id:
+        return None
+    return next(iter(sorted((home / "projects").glob(f"*/{session_id}.jsonl"))), None)
 
 
 def jobs(
