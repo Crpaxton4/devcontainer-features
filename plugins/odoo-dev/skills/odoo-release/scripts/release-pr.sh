@@ -32,6 +32,7 @@
 set -euo pipefail
 
 JSON_GET="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../scripts" && pwd)/json-get.sh"
+. "$(dirname "$JSON_GET")/_gh-account.sh"
 
 usage() {
   echo "usage: release-pr.sh <owner/repo> <from> <to> --manifest-file F --assignee LOGIN --reviewer LOGIN|none [--hosting odoo-sh|on-prem] [--database DB] [--title T]" >&2
@@ -63,6 +64,7 @@ case "$hosting" in
   *) echo "--hosting must be odoo-sh or on-prem" >&2; exit 2 ;;
 esac
 command -v gh >/dev/null 2>&1 || { echo "gh is not installed" >&2; exit 2; }
+gh_auth_as_account || exit 1
 
 body_file="$(mktemp "${TMPDIR:-/tmp}/release-body.XXXXXX.md")"
 trap 'rm -f "$body_file"' EXIT

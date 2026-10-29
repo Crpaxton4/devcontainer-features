@@ -28,6 +28,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$SCRIPT_DIR/_common.sh"
+. "$SCRIPT_DIR/../../../scripts/_gh-account.sh"
 
 [ $# -ge 3 ] || { echo "usage: existing-work.sh <repo> <task_id> <base_branch> [--repo-root DIR]" >&2; exit 2; }
 repo="$1"; task_id="$2"; base_branch="$3"; shift 3
@@ -128,6 +129,8 @@ if ! command -v gh >/dev/null 2>&1; then
   gh_error="gh is not installed — pull request state unknown"
 elif [ -z "$slug" ]; then
   gh_error="no origin remote — pull request state unknown"
+elif ! gh_auth_as_account 2>/dev/null; then
+  gh_error="no gh token for the configured GitHub account — pull request state unknown"
 else
   gh_stderr="$(mktemp "${TMPDIR:-/tmp}/existing-work-gh.XXXXXX")"
   if ! prs_json="$(gh pr list --repo "$slug" --state all --limit 100 \

@@ -13,6 +13,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SUT="$(cd "$SCRIPT_DIR/.." && pwd)/pr-open.sh"
 work="$(mktemp -d "${TMPDIR:-/tmp}/pr-open-test.XXXXXX")"
 trap 'rm -rf "$work"' EXIT
+# No GitHub account unless a case sets one: ignore the developer's own config.
+unset ODOO_GITHUB_ACCOUNT
+export ODOO_DEV_HOME="$work/dev-home"
 
 pass=0; fail=0
 expect() { if [ "$2" = "$3" ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL $1: wanted '$3', got '$2'" >&2; fi; }
@@ -25,7 +28,9 @@ cat > "$bin/gh" <<'STUB'
 # Records "<subcommand> <verb>" per invocation and answers from $GH_EXISTING.
 echo "$1 ${2:-}" >> "$GH_CALLS"
 case "$1 ${2:-}" in
+  "auth token") echo "$1 $2 $3 $4" >> "$GH_CALLS.auth"; echo "tok-$4"; exit 0 ;;
   "pr list")
+    echo "${GH_TOKEN:-unset}" >> "$GH_CALLS.token"
     # A marker file, not an env var: `gh pr create` runs in its own process, so
     # exporting from there would be invisible to the NEXT `gh pr list` the
     # script makes to learn the new PR's number.
@@ -71,6 +76,14 @@ called "pr create"; expect "called pr create" "$?" "0"
 # Existence is checked BEFORE creating; skipping that check is how a task gets
 # a second PR.
 expect "checked for an existing PR first" "$(head -1 "$work/gh-calls")" "pr list"
+
+# ---------- configured GitHub account ------------------------------------------
+[ ! -e "$work/gh-calls.auth" ] || { fail=$((fail+1)); echo "FAIL: token fetched with no account set" >&2; }
+rm -f "$work/gh-calls.token"
+ODOO_GITHUB_ACCOUNT=work run no --draft >/dev/null
+expect "account: token fetched for it" "$(cat "$work/gh-calls.auth")" "auth token --user work"
+expect "account: later gh calls see GH_TOKEN" "$(sort -u "$work/gh-calls.token")" "tok-work"
+rm -f "$work/gh-calls.auth"
 
 # ---------- rerun path ---------------------------------------------------------
 out="$(run yes --draft --assign-me)"
