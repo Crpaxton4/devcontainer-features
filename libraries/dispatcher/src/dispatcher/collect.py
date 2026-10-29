@@ -34,6 +34,12 @@ UNKNOWN_TOOL_VERSION = "unknown"
 SESSION_JSONL = "session.jsonl"
 ENVELOPE_JSON = "envelope.json"
 TASK_JSON = "task.json"
+#: The ``parent_tool_use_id`` stream-json gives every event of a forked command
+#: (``context: fork``) is this prefix and the command name. Observed on Claude
+#: Code 2.1.295, not documented: if it changes, nothing is adopted and the run is
+#: a STRUCTURED_OUTPUT_MISSING dead letter, as before.
+FORK_PARENT_PREFIX = "forked-command-"
+STRUCTURED_TOOL = "StructuredOutput"
 
 
 class StreamParser:
@@ -41,9 +47,14 @@ class StreamParser:
 
     ``feed`` returns the session id the first time one is seen, so the caller
     can record it on the job immediately.
+
+    The entry is a forked command, so the run answers inside the fork, and the
+    result envelope has no ``structured_output`` of its own. The parser keeps the
+    entry fork's accepted ``StructuredOutput`` input and puts it in the envelope
+    when the envelope has none. ``usable_structured`` still checks the value.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, entry: str = "") -> None:
         self.session_id = ""
         self.tool_version = ""
         self.envelope: dict | None = None
@@ -51,6 +62,9 @@ class StreamParser:
         self.saw_output = False
         self.unreadable = False
         self.parsed_any = False
+        self.fork_parent = FORK_PARENT_PREFIX + entry.lstrip("/") if entry else ""
+        self.fork_output: dict | None = None
+        self._pending: dict[str, object] = {}
 
     def feed(self, line: str) -> str | None:
         text = line.strip()
@@ -67,8 +81,27 @@ class StreamParser:
             return None
         self.parsed_any = True
         if event.get("type") == "result":
+            if event.get("structured_output") is None and self.fork_output:
+                event["structured_output"] = self.fork_output
+                text = json.dumps(event)
             self.envelope, self.envelope_text = event, text
+        elif self.fork_parent and event.get("parent_tool_use_id") == self.fork_parent:
+            self._watch_fork(event)
         return self._remember(event)
+
+    def _watch_fork(self, event: dict) -> None:
+        """Keep a fork ``StructuredOutput`` input once its tool result has no error."""
+        message = event.get("message")
+        content = message.get("content") if isinstance(message, dict) else None
+        for block in content if isinstance(content, list) else ():
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") == "tool_use" and block.get("name") == STRUCTURED_TOOL:
+                self._pending[str(block.get("id"))] = block.get("input")
+            elif block.get("type") == "tool_result" and not block.get("is_error"):
+                value = self._pending.pop(str(block.get("tool_use_id")), None)
+                if isinstance(value, dict):
+                    self.fork_output = value
 
     def _remember(self, event: dict) -> str | None:
         if version := event.get("claude_code_version"):

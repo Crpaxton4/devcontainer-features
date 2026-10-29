@@ -107,7 +107,7 @@ class JobRun:
     def __init__(self, engine: "Engine", job: Job):
         self.engine = engine
         self.job = job
-        self.parser = StreamParser()
+        self.parser = StreamParser(lifecycle.job_entry(job, engine.settings))
         self.cause: tuple[DeadReason, str] | None = None
         self.ending: Ending | None = None
         self.ended_us: int | None = None
