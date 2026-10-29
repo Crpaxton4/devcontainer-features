@@ -114,11 +114,19 @@ slug_of() {
         sed -E 's#^(https?://[^/]+/|git@[^:]+:|ssh://git@[^/]+/)##; s#\.git$##; s#/$##'
 }
 
-# Sets ACCOUNT and SOURCE: the `[github] account` of the odoo-dev config.toml,
-# else ODOO_GITHUB_ACCOUNT (the order LocalConfig uses), else the remote owner
-# passed as $1. The odoo-dev plugin does the same lookup in _gh-account.sh.
+# Sets ACCOUNT and SOURCE: the remote owner passed as $1 when a token for it
+# exists, else the `[github] account` of the odoo-dev config.toml, else
+# ODOO_GITHUB_ACCOUNT (the order LocalConfig uses), else the owner anyway, so
+# the caller reports it as unauthenticated. The configured account is for repos
+# whose owner has no token, such as an organization, and must not override an
+# owner that has one. The odoo-dev plugin does a similar lookup in _gh-account.sh.
 resolve_account() {
     local home=${ODOO_DEV_HOME:-$HOME/.config/odoo-dev}
+    if gh auth token --user "$1" >/dev/null 2>&1; then
+        ACCOUNT=$1
+        SOURCE="owner of the origin remote"
+        return
+    fi
     ACCOUNT=$(python3 -c '
 import sys, tomllib
 try:
