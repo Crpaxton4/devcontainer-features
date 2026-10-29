@@ -304,7 +304,11 @@ One template, filled per worker.
   worker N in a batch. Your worktree is `<abs path>`. Every `git` command you
   run must carry `-C <abs path>` and every `gh` command must carry
   `-R <owner>/<repo>` — your Bash calls keep no working directory **and no
-  exported environment** between them."*
+  exported environment** between them. Write the path literally into every
+  command, never as a shell variable (`W=...; git -C "$W"`), and run one
+  command per Bash call without chaining on `&&` or `;`: the worker-isolated
+  permission classifier refuses both forms on the first attempt."* (#1270,
+  seen on three workers in one run.)
 - **The three `gh-as-owner.sh` invocations from the Identity section above**,
   pasted verbatim, with the absolute worktree path substituted. Tell the worker
   these are the only authenticated forms it may use, and that a refusal or
@@ -510,7 +514,7 @@ the text and decide. The three to recognise:
 - **`gh pr merge` denied by the permission classifier** → **degrade to
   handoff**: print the exact command, wait for the user's "merged", re-run.
 
-Three bespoke exit codes:
+The bespoke exit codes:
 
 - **`20`** — same `--id`, different stack. Nothing mutated. Re-plan
   deliberately or use a new `--id`.
