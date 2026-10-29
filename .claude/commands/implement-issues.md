@@ -514,7 +514,7 @@ the text and decide. The three to recognise:
 - **`gh pr merge` denied by the permission classifier** → **degrade to
   handoff**: print the exact command, wait for the user's "merged", re-run.
 
-Three bespoke exit codes:
+The bespoke exit codes:
 
 - **`20`** — same `--id`, different stack. Nothing mutated. Re-plan
   deliberately or use a new `--id`.
