@@ -1,5 +1,12 @@
 # Changelog
 
+## [9.4.0](https://github.com/Crpaxton4/devcontainer-features/compare/dispatcher-v9.3.0...dispatcher-v9.4.0) (2026-10-29)
+
+
+### Features
+
+* **odoo-orchestrator:** answer job questions in the web UI and point run step 5 there ([#1314](https://github.com/Crpaxton4/devcontainer-features/issues/1314)) ([42fb120](https://github.com/Crpaxton4/devcontainer-features/commit/42fb120b8ee6cdd09ad1f18d9ec7d54b193ff872))
+
 ## [9.3.0](https://github.com/Crpaxton4/devcontainer-features/compare/dispatcher-v9.2.1...dispatcher-v9.3.0) (2026-10-29)
 
 

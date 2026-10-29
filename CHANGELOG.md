@@ -1,5 +1,17 @@
 # Changelog
 
+## [9.2.0](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v9.1.0...personal-features-v9.2.0) (2026-10-29)
+
+
+### Features
+
+* **odoo-dev:** ship record-tours and stitch_tours in the odoo-devcontainer skill, with ffmpeg and Roboto in the Feature ([#1313](https://github.com/Crpaxton4/devcontainer-features/issues/1313)) ([90458e2](https://github.com/Crpaxton4/devcontainer-features/commit/90458e229807f0833482e7a209ec4269ef70503c)), closes [#1049](https://github.com/Crpaxton4/devcontainer-features/issues/1049)
+
+
+### Bug Fixes
+
+* **personal-features:** let an authenticated origin owner win over the configured [github] account in gh-as-owner ([#1306](https://github.com/Crpaxton4/devcontainer-features/issues/1306)) ([df7f428](https://github.com/Crpaxton4/devcontainer-features/commit/df7f42859d354467bffa0964b92369a801dfcf23)), closes [#1305](https://github.com/Crpaxton4/devcontainer-features/issues/1305)
+
 ## [9.1.0](https://github.com/Crpaxton4/devcontainer-features/compare/personal-features-v9.0.0...personal-features-v9.1.0) (2026-10-29)
 
 

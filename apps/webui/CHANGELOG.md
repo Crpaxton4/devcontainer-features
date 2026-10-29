@@ -1,5 +1,17 @@
 # Changelog
 
+## [9.4.0](https://github.com/Crpaxton4/devcontainer-features/compare/webui-v9.3.0...webui-v9.4.0) (2026-10-29)
+
+
+### Features
+
+* **odoo-orchestrator:** answer job questions in the web UI and point run step 5 there ([#1314](https://github.com/Crpaxton4/devcontainer-features/issues/1314)) ([42fb120](https://github.com/Crpaxton4/devcontainer-features/commit/42fb120b8ee6cdd09ad1f18d9ec7d54b193ff872))
+
+
+### Bug Fixes
+
+* **webui:** show the session stream in the right half of the job page while running and after ([#1307](https://github.com/Crpaxton4/devcontainer-features/issues/1307)) ([9fa1d2a](https://github.com/Crpaxton4/devcontainer-features/commit/9fa1d2a10b29bf6ccc5c04d007d2f13b0d57e335))
+
 ## [9.3.0](https://github.com/Crpaxton4/devcontainer-features/compare/webui-v9.2.1...webui-v9.3.0) (2026-10-29)
 
 
