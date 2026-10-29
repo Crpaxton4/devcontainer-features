@@ -10,6 +10,7 @@ route and open SQLite with `mode=ro`.
 | Route | Shows |
 |---|---|
 | `/jobs`, `/jobs/<job_id>` | Every job by state, refreshed every 3 s. A detail page has the run outcome, the token and cost figures and the files of the job bundle (`/jobs/<job_id>/files/<name>`). |
+| `/jobs/<job_id>/transcript` | An HTML fragment: the last 80 entries of the live session transcript (`<claude home>/projects/*/<session_id>.jsonl`). The detail page polls it every 2 s while the job is `RUNNING`. |
 | `/queue` | The `PENDING` and `RUNNING` jobs. |
 | `/friction` | The friction entries of each task. |
 | `/usage` | The usage lines of the last days, grouped by kind and name. |

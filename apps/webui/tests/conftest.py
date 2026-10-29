@@ -42,6 +42,7 @@ def home(tmp_path, monkeypatch):
                 job_id=job_id, batch_id="b1", task_id=task, repo="r", brief="x"
             )
         store.mark_running("j-running")
+        store.set_session("j-running", "sess-1")
         store.submit(job_id="j-done", batch_id="b1", task_id="300", repo="r", brief="x")
         store.mark_running("j-done")
         store.record_result(
@@ -73,7 +74,16 @@ def usage_db(home):
 
 
 @pytest.fixture
-def client(home):
+def claude_home(tmp_path, monkeypatch):
+    """A Claude home holding the project directory of the transcripts."""
+    root = tmp_path / "claude"
+    (root / "projects" / "slug").mkdir(parents=True)
+    monkeypatch.setenv("DISPATCH_CLAUDE_HOME", str(root))
+    return root
+
+
+@pytest.fixture
+def client(home, claude_home):
     return create_app().test_client()
 
 
