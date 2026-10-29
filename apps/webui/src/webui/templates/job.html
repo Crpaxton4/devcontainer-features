@@ -29,11 +29,9 @@
 {% endif %}
 </div>
 <aside>
-  <h2>Live session</h2>
-  <div hx-get="{{ url_for('jobs.transcript', job_id=entry.job_id) }}"
-       hx-trigger="{{ 'load, every 2s' if entry.state == 'RUNNING' else 'load' }}"
-       hx-swap="innerHTML"
-       hx-on::after-swap="const p = this.querySelector('pre'); if (p) p.scrollTop = p.scrollHeight"></div>
+  <h2>Session stream</h2>
+  <div id="stream" hx-get="{{ url_for('jobs.transcript', job_id=entry.job_id) }}"
+       hx-trigger="load" hx-swap="outerHTML"></div>
 </aside>
 </div>
 {% endblock %}

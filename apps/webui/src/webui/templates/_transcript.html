@@ -1,7 +1,8 @@
+<div id="stream"{% if polling %} hx-get="{{ url_for('jobs.transcript', job_id=job_id) }}" hx-trigger="every 2s" hx-swap="outerHTML"{% endif %}>
 {% if lines %}
 <pre class="transcript">{% for line in lines %}{{ line }}
-
 {% endfor %}</pre>
 {% else %}
-<p class="empty">Waiting for the session transcript.</p>
+<p class="empty">No session stream.</p>
 {% endif %}
+</div>
