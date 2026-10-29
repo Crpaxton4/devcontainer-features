@@ -1,5 +1,12 @@
 # Changelog
 
+## [9.4.1](https://github.com/Crpaxton4/devcontainer-features/compare/webui-v9.4.0...webui-v9.4.1) (2026-10-29)
+
+
+### Bug Fixes
+
+* **webui:** keep the job page in two fixed halves of the viewport ([#1319](https://github.com/Crpaxton4/devcontainer-features/issues/1319)) ([043a283](https://github.com/Crpaxton4/devcontainer-features/commit/043a283d6e259355cd1601e000c45e1ee8ebd8bd))
+
 ## [9.4.0](https://github.com/Crpaxton4/devcontainer-features/compare/webui-v9.3.0...webui-v9.4.0) (2026-10-29)
 
 
