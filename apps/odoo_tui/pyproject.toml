@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "odoo_tui"
-version = "9.2.0"
+version = "9.2.1"
 description = "Terminal UI app of the odoo-dev suite: the odoo-tui entry point."
 requires-python = ">=3.10"
 dependencies = [
