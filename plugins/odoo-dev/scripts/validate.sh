@@ -342,6 +342,7 @@ run_suite "oca-check.test.sh"      "$SKILLS/odoo-prior-art/scripts/tests/oca-che
 # would have caught, and the list would have an exemption for the gate that
 # polices exemptions.
 run_suite "check-suite-registry.test.sh" "$HERE/tests/check-suite-registry.test.sh"
+run_suite "check-standards.test.sh" "$HERE/tests/check-standards.test.sh"
 
 # --- 12. eval suite --------------------------------------------------------------
 # `claude plugin eval` is early-access gated, so the suite cannot be RUN here. The
