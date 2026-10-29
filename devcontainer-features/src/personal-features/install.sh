@@ -2880,7 +2880,7 @@ install_odoo_ls() {
 
 echo "Installing productivity/navigation CLI tools"
 apt-get update -y
-apt-get install -y --no-install-recommends ripgrep fd-find fzf bat jq unzip
+apt-get install -y --no-install-recommends ripgrep fd-find fzf bat jq unzip ffmpeg fonts-roboto-unhinted
 
 # On arm64, qsv only ships the dynamically-linked gnu build, whose full binary
 # links libwayland-client.so.0 (via its clipboard feature) - absent on the

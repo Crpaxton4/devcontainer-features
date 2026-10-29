@@ -1,0 +1,25 @@
+title: <Walkthrough title>
+subtitle: <Modules and Odoo series>
+end_card: End of the walkthrough
+recordings_dir: /mnt/recordings/screencasts/<db>/screencasts
+output: /mnt/recordings/screencasts/<db>/<name>_walkthrough_{date}.mp4
+splash_seconds: 5
+hold_seconds: 3
+fade_seconds: 0.5
+# Optional, with these defaults:
+# width: 1366
+# height: 768
+# fps: 25
+chapters:
+  # One entry per tour, in the business workflow order. `tour` matches
+  # <tour>_<timestamp>.mp4 in recordings_dir (the newest file wins);
+  # `file` gives an explicit path instead.
+  - tour: <first_tour_name>
+    title: <Chapter title>
+    description: >-
+      <One to three sentences shown on the chapter splash screen.>
+
+  - tour: <second_tour_name>
+    title: <Chapter title>
+    description: >-
+      <One to three sentences shown on the chapter splash screen.>
