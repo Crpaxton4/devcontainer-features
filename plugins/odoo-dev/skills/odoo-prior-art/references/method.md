@@ -39,6 +39,8 @@ Verdict format, one line per capability:
 - `native: yes | yes/partial | partial | no` — exactly one of these four values, nothing else in the cell. `no` — target standard have nothing equivalent.
 - `native notes: <how/where in target>` — for any value but `no`, name target module, feature, or setting. Examples: `mail composer has cc/bcc fields`, `stock.picking has date_done`, `account 'send & print' wizard`. The explanation never goes in the `native` cell.
 
+The four values are the human prior-art vocabulary. `build_workbook.py` never derives `yes/partial`: it derives `yes | partial | no` from the evidence rows, and `propose_action` treats a legacy `yes/partial` cell like `yes` (`merge-into-standard`).
+
 Evidence: at least one path in target tree, or exact grep terms tried when answer `no`. "I looked" not evidence.
 
 Ask same question of vendor and OCA modules customer already run: bought app that target version absorbed is *merge into standard*, not *replace*.
