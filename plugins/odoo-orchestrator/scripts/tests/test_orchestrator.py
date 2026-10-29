@@ -15,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import orchestrator as orch  # noqa: E402
 
 A, B = "a" * 32, "b" * 32
+LEGACY = "legacy-task-runs"
 
 
 class Base(unittest.TestCase):
@@ -230,6 +231,22 @@ class Reports(Base):
     def test_bad_batch_id_is_a_clean_error(self):
         for verb in ("friction", "records", "batch-done"):
             self.assertEqual(self.run_main(verb, "../x")[0], 2, verb)
+
+    def test_legacy_batch_id_is_accepted_by_every_batch_verb(self):
+        self.submit("j1", "7", batch=LEGACY)
+        self.finish("j1")
+        self.assertEqual(self.run_main("friction", LEGACY)[0], 0)
+        self.assertEqual(self.run_main("records", LEGACY)[0], 0)
+        self.assertIn("| 7 | j1 |", self.run_main("records", LEGACY)[1])
+        self.assertEqual(self.run_main("batches")[1].split(), [LEGACY])
+        self.assertEqual(self.run_main("batch-done", LEGACY)[0], 0)
+        self.assertEqual(self.run_main("batches")[1].strip(), "")
+        self.assertIsNotNone(self.job("j1").reported_us)
+
+    def test_near_legacy_ids_are_refused(self):
+        for verb in ("friction", "records", "batch-done"):
+            for bad in (LEGACY + "/..", "../" + LEGACY, LEGACY.upper()):
+                self.assertEqual(self.run_main(verb, bad)[0], 2, (verb, bad))
 
 
 class Batches(Base):
