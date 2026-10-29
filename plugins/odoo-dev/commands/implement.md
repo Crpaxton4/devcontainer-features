@@ -2,7 +2,7 @@
 description: Implement one Odoo task unattended, from the host's brief to a draft pull request, by chaining the spec, build, test, iterate and pr stages.
 argument-hint: <task-id> <brief>
 arguments: [task]
-allowed-tools: Bash(${CLAUDE_PLUGIN_ROOT}/scripts/state-dir.sh:*), Bash(${CLAUDE_PLUGIN_ROOT}/scripts/artifact.sh:*)
+allowed-tools: Bash(${CLAUDE_PLUGIN_ROOT}/scripts/state-dir.sh:*), Bash(${CLAUDE_PLUGIN_ROOT}/scripts/artifact.sh:*), Bash(${CLAUDE_PLUGIN_ROOT}/scripts/check-standards.sh:*)
 context: fork
 agent: odoo-dev:odoo-dev-implementer
 background: false
@@ -10,6 +10,7 @@ background: false
 
 ARTIFACTS: !`${CLAUDE_PLUGIN_ROOT}/scripts/state-dir.sh task --create --else 'NO ARTIFACTS DIRECTORY — the first argument is not an Odoo task id' -- "$task"`
 ARTIFACT: ${CLAUDE_PLUGIN_ROOT}/scripts/artifact.sh
+CHECK: ${CLAUDE_PLUGIN_ROOT}/scripts/check-standards.sh
 
 If the ARTIFACTS line does not start with `/` it is a marker, not a path: reply
 with exactly `usage: /odoo-dev:implement <task-id> <brief>` and stop.
