@@ -28,6 +28,13 @@ def test_job_detail_shows_entry_structured_output_and_files(client):
     assert "files/STOP" not in html
 
 
+def test_job_detail_splits_the_viewport_and_wraps_only_the_structured_output(client):
+    html = client.get("/jobs/j-done").get_data(as_text=True)
+    assert '<body class="split">' in html
+    assert '<pre class="wrap">' in html
+    assert '<body class="">' in client.get("/jobs").get_data(as_text=True)
+
+
 def test_job_detail_without_bundle(client):
     html = client.get("/jobs/j-pending").get_data(as_text=True)
     assert "No structured output" in html and "No bundle file" in html

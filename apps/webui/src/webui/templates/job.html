@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% block title %}Job {{ entry.job_id }}{% endblock %}
+{% block body_class %}split{% endblock %}
 {% block content %}
 <div class="cols">
 <div>
@@ -12,7 +13,7 @@
 
 <h2>Structured output</h2>
 {% if structured != "null" %}
-<pre>{{ structured }}</pre>
+<pre class="wrap">{{ structured }}</pre>
 {% else %}
 <p class="empty">No structured output is stored for this job.</p>
 {% endif %}
