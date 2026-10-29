@@ -1,5 +1,12 @@
 # Changelog
 
+## [9.4.1](https://github.com/Crpaxton4/devcontainer-features/compare/dispatcher-v9.4.0...dispatcher-v9.4.1) (2026-10-29)
+
+
+### Miscellaneous Chores
+
+* **dispatcher:** Synchronize odoo-dev-suite versions
+
 ## [9.4.0](https://github.com/Crpaxton4/devcontainer-features/compare/dispatcher-v9.3.0...dispatcher-v9.4.0) (2026-10-29)
 
 

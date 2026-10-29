@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "odoo_mcp"
-version = "9.4.0"
+version = "9.4.1"
 description = "MCP server app of the odoo-dev suite: the odoo-mcp entry point."
 requires-python = ">=3.10"
 dependencies = [
