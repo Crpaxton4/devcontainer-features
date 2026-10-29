@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.0](https://github.com/Crpaxton4/devcontainer-features/compare/odoo-orchestrator-plugin-v1.2.0...odoo-orchestrator-plugin-v1.3.0) (2026-10-29)
+
+
+### Features
+
+* **orchestrator:** add the report-incident skill ([#1292](https://github.com/Crpaxton4/devcontainer-features/issues/1292)) ([97937e0](https://github.com/Crpaxton4/devcontainer-features/commit/97937e09c2a1417bb87340b0e2c8f22958732629))
+
 ## [1.2.0](https://github.com/Crpaxton4/devcontainer-features/compare/odoo-orchestrator-plugin-v1.1.0...odoo-orchestrator-plugin-v1.2.0) (2026-10-26)
 
 
