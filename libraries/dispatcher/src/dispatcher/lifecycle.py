@@ -39,7 +39,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from odoo_dev_data.home import CONTAINER_HOME
+from odoo_dev_data.config import LocalConfig
+from odoo_dev_data.home import CONTAINER_HOME, paths
 
 from .schema import schema_argument
 from .settings import (
@@ -415,6 +416,49 @@ def wait_ready(
                 f"readiness: not ready after {timeout_s}s: {pg_text} / {odoo_text}"
             )
         sleep(poll_s)
+
+
+_ACCOUNT_SETTING = "[github] account in config.toml or ODOO_GITHUB_ACCOUNT"
+
+
+def configured_github_account(settings: Settings) -> str | None:
+    """Return the GitHub account the agents act as, from ``config.toml`` and env.
+
+    :raises ContainerStartError: When ``config.toml`` cannot be read.
+    """
+    try:
+        config = LocalConfig.load(path=paths(settings.home).config_toml, env=os.environ)
+    except (OSError, ValueError) as exc:
+        raise ContainerStartError(f"config.toml unreadable: {exc}") from exc
+    return config.github_account
+
+
+def require_gh_account(
+    shell: Shell, container_id: str, account: str | None, env: dict[str, str]
+) -> None:
+    """Fail admission unless ``gh`` in the container holds a token for ``account``.
+
+    A job that pushes as the wrong account fails hours in, with a 403. This
+    check fails it before the session starts, with the setting named.
+
+    :raises ContainerStartError: When no account is configured or the token
+        command fails.
+    """
+    if not account:
+        raise ContainerStartError(
+            f"no GitHub account configured: set {_ACCOUNT_SETTING}"
+        )
+    done = shell.run(
+        ["docker", "exec", container_id, "gh", "auth", "token", "--user", account],
+        env=env,
+        timeout=READY_PROBE_TIMEOUT_S,
+    )
+    if done.returncode != 0:
+        raise ContainerStartError(
+            _failure_text(f"gh auth token --user {account}", done)
+            + f" (GitHub account {account!r} from {_ACCOUNT_SETTING}: "
+            "log it in to gh on the host)"
+        )
 
 
 def _bind_sources(mounts: list[dict]) -> dict[str, str]:

@@ -12,6 +12,7 @@ def home(tmp_path, monkeypatch):
     monkeypatch.setenv("ODOO_DEV_HOME", str(root))
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.delenv("COMPOSE_PROJECT_NAME", raising=False)
+    monkeypatch.setenv("ODOO_GITHUB_ACCOUNT", "work")
     return root
 
 

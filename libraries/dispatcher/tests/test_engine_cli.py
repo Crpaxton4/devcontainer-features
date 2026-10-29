@@ -236,6 +236,40 @@ def test_admit_probes_readiness_after_the_mount_assertion(world):
     assert inspect < argvs.index(PG) < argvs.index(ODOO)
 
 
+TOKEN = ["docker", "exec", "c", "gh", "auth", "token", "--user"]
+
+
+def test_admit_checks_the_account_token_in_the_container(world):
+    engine, shell, _ = world
+    (job,) = _submit(engine, ("qoc", "21"))
+    run = JobRun(engine, engine.jobs.get(job.job_id))
+    assert run.admit() is True
+    assert len(shell.commands(*TOKEN, "work")) == 1
+
+
+def test_an_unset_account_dead_letters_naming_the_setting(world, monkeypatch):
+    engine, shell, _ = world
+    monkeypatch.delenv("ODOO_GITHUB_ACCOUNT")
+    (job,) = _submit(engine, ("qoc", "22"))
+    engine.run()
+    dead = engine.jobs.get(job.job_id)
+    assert dead.dead_reason == DeadReason.CONTAINER_START_FAILED.value
+    assert "[github] account" in dead.detail and "ODOO_GITHUB_ACCOUNT" in dead.detail
+    assert not shell.spawned
+
+
+def test_a_missing_token_dead_letters_naming_the_account(world):
+    engine, shell, _ = world
+    shell.reply(TOKEN, Completed(1, "", "no token found"))
+    (job,) = _submit(engine, ("qoc", "23"))
+    engine.run()
+    dead = engine.jobs.get(job.job_id)
+    assert dead.dead_reason == DeadReason.CONTAINER_START_FAILED.value
+    assert "'work'" in dead.detail and "no token found" in dead.detail
+    assert "ODOO_GITHUB_ACCOUNT" in dead.detail
+    assert not shell.spawned
+
+
 def test_a_slow_probe_is_retried_and_the_job_proceeds(world, monkeypatch):
     engine, shell, _ = world
     slept = []
