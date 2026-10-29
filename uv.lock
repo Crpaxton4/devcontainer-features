@@ -33,7 +33,7 @@ members = [
 dev = [
     { name = "black", specifier = ">=26.5.1" },
     { name = "complexipy", specifier = ">=6.0.1" },
-    { name = "coverage", extras = ["toml"], specifier = ">=7.15.2" },
+    { name = "coverage", extras = ["toml"], specifier = ">=7.17.0" },
     { name = "hypothesis", specifier = ">=6.157.1" },
     { name = "import-linter", specifier = ">=2.3" },
     { name = "pytest", specifier = ">=9.1.1" },
@@ -1107,7 +1107,7 @@ static-analysis = [
     { name = "complexipy", specifier = ">=6.0.1" },
 ]
 test = [
-    { name = "coverage", extras = ["toml"], specifier = ">=7.15.2" },
+    { name = "coverage", extras = ["toml"], specifier = ">=7.17.0" },
     { name = "pytest", specifier = ">=9.1.1" },
 ]
 
@@ -2597,7 +2597,7 @@ dev = [
     { name = "black", specifier = ">=26.5.1" },
     { name = "complexipy", specifier = ">=6.0.1" },
     { name = "cosmic-ray", specifier = ">=8.4.6" },
-    { name = "coverage", extras = ["toml"], specifier = ">=7.15.2" },
+    { name = "coverage", extras = ["toml"], specifier = ">=7.17.0" },
     { name = "hypothesis", specifier = ">=6.157.1" },
     { name = "import-linter", specifier = ">=2.3" },
     { name = "pygount", specifier = ">=3.2.0" },
@@ -2613,7 +2613,7 @@ static-analysis = [
 ]
 test = [
     { name = "cosmic-ray", specifier = ">=8.4.6" },
-    { name = "coverage", extras = ["toml"], specifier = ">=7.15.2" },
+    { name = "coverage", extras = ["toml"], specifier = ">=7.17.0" },
     { name = "hypothesis", specifier = ">=6.157.1" },
 ]
 
