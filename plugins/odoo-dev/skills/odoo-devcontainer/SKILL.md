@@ -61,6 +61,26 @@ Write every path in full: `<base directory>/scripts/<script>`.
 | --- | --- | --- |
 | `bump_manifest_version.py [--series NN.0] <module dir>` | the new manifest version. `--series` is for a port: it moves the series prefix to NN.0, keeps A.B.C, then bumps | 0 |
 | `list_modules.sh` | a comma-separated list of all modules | 0 |
+| `record-tours [options] <odoo args>` | what `odoo` prints. A passed tour also writes `<tour>_<timestamp>.mp4` and `.gif` under the `screencasts` directory. Reads `ODOO_VERSION` | the exit code of `odoo`; non-zero when the series has no implementation |
+| `stitch_tours.py [chapters.yaml] [--work-dir DIR]` | the chapter list, the output path, the duration and the size of one walkthrough MP4 | 0 |
+
+## Record the tours as a walkthrough video
+
+Requirements:
+
+- A full `ffmpeg` from apt. The Playwright `ffmpeg` cannot encode.
+- The Roboto fonts (`fonts-roboto-unhinted`). `stitch_tours.py` only.
+- Pillow and PyYAML in the interpreter that runs `stitch_tours.py`.
+- `ODOO_BROWSER_BIN` set to the Playwright chromium headless shell.
+- `screencasts` set in `odoo.conf`.
+
+Commands:
+
+1. Record: `<base directory>/scripts/record-tours -d <db> --test-enable --test-tags /<module>:<TourClass> --stop-after-init`
+2. Copy `<base directory>/scripts/chapters.example.yaml`, fill it in, and run `python3 <base directory>/scripts/stitch_tours.py <chapters file>`.
+
+`record-tours` supports Odoo 17.0 and 18.0 (only 17.0 was run). On 16.0, 19.0 and 20.0 it exits
+non-zero and names the series. The header of the script lists the other options.
 
 ## Rules
 

@@ -1,0 +1,74 @@
+#!/usr/bin/env python3
+"""Record the browser tours of a test run as MP4 (and GIF) walkthrough visuals.
+
+Drop-in replacement of the ``odoo`` command: the options below are removed from
+the command line, every other argument goes to ``odoo.cli.main()``. Nothing is
+installed in the database; the test runner is patched in-process.
+
+The Odoo series comes from ``ODOO_VERSION``. The command picks the patch set
+for that series, and exits non-zero when the variable is unset, malformed, or
+names a series with no implementation. Supported series: 17.0, 18.0.
+
+* ``HttpCase.start_tour`` runs the tour slowly (``stepDelay``), shows the tour
+  pointer before each action (``showPointerDuration``), keeps the pointer
+  bubble open and shows the step ``content`` in a caption bar (72 px) at the
+  bottom of the viewport.
+* ``ChromeBrowser.stop`` encodes the screencast frames of a passed tour into
+  ``<screencasts>/<db>/screencasts/<tour>_<timestamp>.mp4`` (and ``.gif``)
+  instead of deleting them. Failed tours keep the stock behaviour.
+
+Options:
+  --step-delay MS        pause after each step (default 1000)
+  --pointer-duration MS  time the pointer shows before each action (default 2000)
+  --timeout S            browser timeout of a tour in seconds (default 900)
+  --ffmpeg PATH          ffmpeg binary (default: ``ffmpeg`` on the PATH). A full build
+                         is needed (concat demuxer, H.264 and GIF encoders): the
+                         Playwright bundle under ~/.cache/ms-playwright is not enough,
+                         ``apt-get install ffmpeg`` is.
+  --no-gif               write only the MP4
+  --gif-filter FILTER    ffmpeg filter that starts the GIF pass (default fps=6,scale=1024:-1)
+  --python PATH          re-run under this interpreter (default: $ODOO_VENV_PYTHON,
+                         else keep the current interpreter)
+
+Example::
+
+    export ODOO_VERSION=17.0
+    export ODOO_BROWSER_BIN=/var/lib/odoo/.cache/ms-playwright/chromium_headless_shell-1243/chrome-headless-shell-linux64/chrome-headless-shell
+    record-tours -d <db> --test-enable --test-tags /<module>:<TourTestClass> --stop-after-init
+"""
+import importlib
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+
+from record_tours import common  # noqa: E402
+
+
+def main():
+    settings, odoo_args = common.parse_args(sys.argv[1:])
+
+    try:
+        implementation = common.select_implementation(os.environ.get('ODOO_VERSION'))
+    except common.SeriesError as err:
+        sys.exit('record-tours: %s' % err)
+
+    python = common.venv_python(settings)
+    if python and os.path.realpath(sys.executable) != os.path.realpath(python):
+        if not os.access(python, os.X_OK):
+            sys.exit('record-tours: interpreter %s is not executable' % python)
+        os.execv(python, [python, os.path.realpath(__file__), *sys.argv[1:]])
+
+    os.environ['TZ'] = 'UTC'
+    import odoo
+    import odoo.cli
+    import odoo.tests.common as odoo_common
+
+    importlib.import_module(implementation).apply(odoo_common, settings)
+
+    sys.argv = [sys.argv[0], *odoo_args]
+    odoo.cli.main()
+
+
+if __name__ == '__main__':
+    main()
