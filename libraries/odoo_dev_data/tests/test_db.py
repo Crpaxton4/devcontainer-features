@@ -43,9 +43,10 @@ def test_connect_creates_state_db_and_applies_both_migrations(home):
         (1, "events"),
         (2, "jobs"),
         (3, "jobs_handled"),
+        (4, "jobs_answers"),
     ]
     assert all(applied > 0 for _, _, applied in ledger)
-    assert schema_version(conn) == 3
+    assert schema_version(conn) == 4
 
 
 def test_second_connect_applies_nothing(home):

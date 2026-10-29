@@ -85,7 +85,7 @@ services:
       - "${ODOO_DEV_HOME:-${HOME}/.config/odoo-dev}:${ODOO_DEV_HOME:-${HOME}/.config/odoo-dev}"
       - "${ODOO_ORCHESTRATOR_SCRIPTS_DIR:-${ODOO_ORCHESTRATOR_CHECKOUT}/plugins/odoo-orchestrator/scripts}:${ODOO_ORCHESTRATOR_SCRIPTS_DIR:-${ODOO_ORCHESTRATOR_CHECKOUT}/plugins/odoo-orchestrator/scripts}:ro"
 
-  # The read-only web interface at http://127.0.0.1:8765. It needs no docker socket.
+  # The web interface (read-only except for answers to job questions) at http://127.0.0.1:8765. It needs no docker socket.
   # dispatch.sh starts it with the dispatcher (`up -d dispatcher webui`; a second
   # start finds it running). "unless-stopped" keeps it up after the dispatcher
   # exits on a drained queue and after a daemon restart, until someone stops it.
@@ -105,8 +105,8 @@ services:
       ODOO_DEV_HOME: "${ODOO_DEV_HOME:-${HOME}/.config/odoo-dev}"
       DISPATCH_CLAUDE_HOME: "${DISPATCH_CLAUDE_HOME:-${HOME}/.claude}"
     # The state root is read-write on purpose: a :ro bind breaks a WAL reader when
-    # -wal and -shm are absent. The pages open SQLite with mode=ro and have no
-    # write route.
+    # -wal and -shm are absent. The pages open SQLite with mode=ro; the one write
+    # route saves answers to job questions.
     # Only projects/ of the Claude home crosses, read-only, so no credential file
     # enters the web UI. The live session panel reads the transcripts there.
     volumes:

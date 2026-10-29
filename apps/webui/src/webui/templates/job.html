@@ -17,6 +17,33 @@
 <p class="empty">No structured output is stored for this job.</p>
 {% endif %}
 
+{% if questions %}
+<h2>Questions</h2>
+{% if answers is not none %}
+<ol>
+  {% for q in questions %}
+  {% set a = answers[loop.index0] if loop.index0 < answers|length else none %}
+  <li>{{ q.question }}
+    <br>Assumption: {{ q.assumption }}
+    <br>Answer: {% if a and not a.accepted %}{{ a.answer }}{% else %}accepted the assumption{% endif %}</li>
+  {% endfor %}
+</ol>
+{% else %}
+<form method="post" action="{{ url_for('jobs.save_answers', job_id=entry.job_id) }}">
+  <ol>
+    {% for q in questions %}
+    <li>{{ q.question }}
+      <br>Assumption: {{ q.assumption }}
+      <br>Reason: {{ q.why }}
+      <br><input type="text" name="answer_{{ loop.index0 }}" placeholder="blank accepts the assumption" size="60"></li>
+    {% endfor %}
+  </ol>
+  <button type="submit">Save answers</button>
+  <button type="submit" name="accept_all" value="1">Accept all</button>
+</form>
+{% endif %}
+{% endif %}
+
 <h2>Bundle files</h2>
 {% if files %}
 <ul>

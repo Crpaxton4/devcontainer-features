@@ -25,7 +25,7 @@ private data, and files it after you approve.
 |---|---|
 | `dispatch.sh` | The one place the orchestrator calls the dispatcher. It is a front end for `docker compose` with `stack/compose.yaml`. `add '<json>'` submits the jobs and starts the dispatcher and web UI containers. Any other verb runs `dispatch` with those arguments. |
 | `orchestrator.sh` | Runs `orchestrator.py` in the `orchestrator` service of the stack. |
-| `orchestrator.py` | Helpers: `plan`, `approve`, `approved`, `approve-job`, `lint`, `unhandled`, `handled`, `friction`, `records`, `batches`, `batch-done`. |
+| `orchestrator.py` | Helpers: `plan`, `approve`, `approved`, `approve-job`, `lint`, `unhandled`, `handled`, `friction`, `records`, `batches`, `batch-done`, `answers <job_id>`. |
 | `validate.sh` | The gates of this plugin. |
 
 Briefs, approvals and the handled and reported marks live in the state root

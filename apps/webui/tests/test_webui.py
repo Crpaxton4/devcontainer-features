@@ -1,4 +1,7 @@
+import json
+
 import pytest
+from odoo_dev_data.jobs import JobStore
 
 
 def test_jobs_page_lists_every_job_with_its_figures(client):
@@ -111,15 +114,64 @@ def test_empty_state_texts(empty_client):
     assert "No friction entry" in empty_client.get("/friction").get_data(as_text=True)
 
 
-def test_only_get_routes():
+def test_the_only_non_get_route_is_the_answers_post():
     from webui import create_app
 
-    for rule in create_app().url_map.iter_rules():
-        assert rule.methods - {"GET", "HEAD", "OPTIONS"} == set(), rule.rule
+    writes = {
+        rule.rule
+        for rule in create_app().url_map.iter_rules()
+        if rule.methods - {"GET", "HEAD", "OPTIONS"}
+    }
+    assert writes == {"/jobs/<job_id>/answers"}
 
 
-def test_post_is_refused(client):
+def test_post_is_refused_on_every_other_route(client):
     assert client.post("/jobs").status_code == 405
+
+
+def test_job_page_renders_the_question_form_for_a_done_job(client):
+    html = client.get("/jobs/j-done").get_data(as_text=True)
+    for text in ("Which tax?", "Assumption: VAT", "Reason: unclear", "Accept all"):
+        assert text in html
+    assert 'action="/jobs/j-done/answers"' in html
+    assert 'name="answer_1"' in html
+
+
+def test_no_form_when_the_job_has_no_questions(client):
+    assert "<form" not in client.get("/jobs/j-dead").get_data(as_text=True)
+
+
+def test_post_saves_written_and_accepted_answers(client, home):
+    response = client.post(
+        "/jobs/j-done/answers", data={"answer_0": " GST ", "answer_1": ""}
+    )
+    assert (
+        response.status_code == 302 and response.headers["Location"] == "/jobs/j-done"
+    )
+    with JobStore(home=home) as store:
+        assert json.loads(store.get("j-done").answers) == [
+            {"question": "Which tax?", "accepted": False, "answer": "GST"},
+            {"question": "Which team?", "accepted": True, "answer": ""},
+        ]
+    html = client.get("/jobs/j-done").get_data(as_text=True)
+    assert "GST" in html and "accepted the assumption" in html and "<form" not in html
+
+
+def test_accept_all_ignores_typed_text(client, home):
+    client.post("/jobs/j-done/answers", data={"accept_all": "1", "answer_0": "x"})
+    with JobStore(home=home) as store:
+        assert all(a["accepted"] for a in json.loads(store.get("j-done").answers))
+
+
+@pytest.mark.parametrize("job_id", ["j-pending", "j-running", "j-dead"])
+def test_post_on_a_job_that_is_not_done_is_refused(client, home, job_id):
+    assert client.post(f"/jobs/{job_id}/answers", data={}).status_code == 409
+    with JobStore(home=home) as store:
+        assert store.get(job_id).answers is None
+
+
+def test_post_on_an_unknown_job_is_404(client):
+    assert client.post("/jobs/nope/answers", data={}).status_code == 404
 
 
 def test_running_job_streams_the_live_transcript_tail(client, claude_home):

@@ -49,7 +49,7 @@ and `ODOO_DEV_HOME`. Do not nest one of these paths inside another.
 
 `dispatch.sh` starts the `webui` service with the dispatcher. It stays up after the
 dispatcher exits (`restart: unless-stopped`). Open `http://127.0.0.1:8765`. The port
-is published on the loopback interface only. The pages are read-only:
+is published on the loopback interface only. The pages are read-only, except for answers to job questions:
 
 - Jobs: every job by state, refreshed every 3 s, and a detail page per job with
   the run outcome, the token and cost figures and the files of its bundle.

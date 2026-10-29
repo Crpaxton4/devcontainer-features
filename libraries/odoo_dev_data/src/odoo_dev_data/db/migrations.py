@@ -128,4 +128,12 @@ CREATE TABLE jobs (
         "jobs_handled",
         ("ALTER TABLE jobs ADD COLUMN handled_us INTEGER",),
     ),
+    Migration(
+        4,
+        "jobs_answers",
+        (
+            "ALTER TABLE jobs ADD COLUMN answers TEXT "
+            "CHECK (answers IS NULL OR json_valid(answers))",
+        ),
+    ),
 )

@@ -221,14 +221,19 @@ read the job rows themselves.
    envelope has a blank summary.
 3. For each job in state `DEAD_LETTER`, show `dead_reason` and `detail`, and
    decide as in step 1. Do not hide a dead letter behind a summary.
-4. For each `DONE` job, read the questions in the job's bundle (the
-   `structured_output.questions` of its envelope file). A question comes with the
-   assumption made in its absence. The user answers on the draft pull request or
-   here.
-5. Turn the answers into a new brief of behaviour, as the requirement line says,
-   with `plan`. Take the user's approval for that task as in step 3, then
-   submit it with `dispatch.sh add` as in step 4 at `round` plus 1. A task with no
-   answers needs nothing more.
+4. For each `DONE` job with `question_count` above 0, run
+   `orchestrator.sh answers <job_id>`. Do not read the questions yourself.
+   - It exits 1 and prints `no answers`: the user has not answered. Print the
+     question count and `http://127.0.0.1:8765/jobs/<job_id>`, where the user
+     answers in the web UI. Go on to the next job.
+   - It exits 0 and prints a JSON list: every item has `accepted` true. The
+     assumptions stand. Nothing more is needed for this task.
+   - It exits 0 and some item has `accepted` false: go to action 5.
+5. Use only the `question` and `answer` of the items with `accepted` false. The
+   other assumptions stand. Turn them into a new brief of
+   behaviour, as the requirement line says, with `plan`. Take the user's approval
+   for that task as in step 3, then submit it with `dispatch.sh add` as in
+   step 4 at `round` plus 1.
 
 The answer loop ends at `add`, like step 4. The next round is a new batch, and a
 later run of step 5 reads it. A failure always comes back as a status, and you

@@ -49,7 +49,24 @@ def home(tmp_path, monkeypatch):
             "j-done",
             outcome="COMPLETED",
             session_id="s",
-            envelope={"structured_output": {"outcome": "done", "summary": "ok"}},
+            envelope={
+                "structured_output": {
+                    "outcome": "done",
+                    "summary": "ok",
+                    "questions": [
+                        {
+                            "question": "Which tax?",
+                            "assumption": "VAT",
+                            "why": "unclear",
+                        },
+                        {
+                            "question": "Which team?",
+                            "assumption": "Sales",
+                            "why": "none set",
+                        },
+                    ],
+                }
+            },
             cost_usd=1.25,
             question_count=3,
         )

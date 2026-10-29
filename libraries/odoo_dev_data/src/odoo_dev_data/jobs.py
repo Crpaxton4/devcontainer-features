@@ -158,6 +158,7 @@ class Job:
     friction_recorded_us: int | None = None
     stop_requested_us: int | None = None
     question_count: int = 0
+    answers: str | None = None
 
     @classmethod
     def from_row(cls, row: sqlite3.Row) -> Job:
@@ -497,6 +498,15 @@ class JobStore:
             (job_id,),
             job_id,
             "count a question on a job that is not RUNNING",
+        )
+
+    def save_answers(self, job_id: str, answers: list[dict]) -> Job:
+        """Store the user's answers (a JSON list) on a DONE job."""
+        return self._transition(
+            "UPDATE jobs SET answers=? WHERE job_id=? AND state='DONE'",
+            (json.dumps(answers), job_id),
+            job_id,
+            "save answers on a job that is not DONE",
         )
 
     def _mark(self, column: str, job_ids: Iterable[str], now_us: int | None) -> int:

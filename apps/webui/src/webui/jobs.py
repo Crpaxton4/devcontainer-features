@@ -3,8 +3,18 @@
 import json
 from pathlib import Path
 
+from dispatcher import answers as dispatcher_answers
 from dispatcher import reporting
-from flask import Blueprint, Response, abort, current_app, render_template, request
+from flask import (
+    Blueprint,
+    Response,
+    abort,
+    current_app,
+    redirect,
+    render_template,
+    request,
+    url_for,
+)
 
 bp = Blueprint("jobs", __name__)
 
@@ -54,7 +64,35 @@ def detail(job_id: str):
         entry=entry,
         structured=json.dumps(structured, indent=2, sort_keys=True),
         files=files,
+        questions=_questions(structured) if job.state.value == "DONE" else [],
+        answers=json.loads(job.answers) if job.answers else None,
     )
+
+
+def _questions(structured: dict | None) -> list[dict]:
+    """The ``{question, assumption, why}`` objects of the structured output."""
+    found = structured.get("questions") if structured else None
+    return [q for q in found if isinstance(q, dict)] if isinstance(found, list) else []
+
+
+@bp.post("/jobs/<job_id>/answers")
+def save_answers(job_id: str):
+    """Save one answer per question; a blank field accepts the assumption."""
+    job = _job(job_id)
+    questions = _questions(reporting.job_entry(job)["structured"])
+    if job.state.value != "DONE" or not questions:
+        abort(409)
+    accept_all = "accept_all" in request.form
+    answers = []
+    for index, item in enumerate(questions):
+        text = "" if accept_all else request.form.get(f"answer_{index}", "").strip()
+        answers.append(
+            {"question": item.get("question", ""), "accepted": not text, "answer": text}
+        )
+    dispatcher_answers.save_answers(
+        current_app.config["ODOO_DEV_HOME"], job_id, answers
+    )
+    return redirect(url_for("jobs.detail", job_id=job_id))
 
 
 def _stream_lines(job) -> list[str] | None:
