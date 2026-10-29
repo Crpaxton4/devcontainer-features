@@ -1,5 +1,13 @@
 # Changelog
 
+## [6.2.0](https://github.com/Crpaxton4/devcontainer-features/compare/odoo-dev-plugin-v6.1.0...odoo-dev-plugin-v6.2.0) (2026-10-29)
+
+
+### Features
+
+* **odoo-dev:** gate implement on a code-standards check before the PR stage ([#1308](https://github.com/Crpaxton4/devcontainer-features/issues/1308)) ([7ea3b71](https://github.com/Crpaxton4/devcontainer-features/commit/7ea3b710aef6568230843aa7eefb37067b7690b8))
+* **odoo-dev:** ship record-tours and stitch_tours in the odoo-devcontainer skill, with ffmpeg and Roboto in the Feature ([#1313](https://github.com/Crpaxton4/devcontainer-features/issues/1313)) ([90458e2](https://github.com/Crpaxton4/devcontainer-features/commit/90458e229807f0833482e7a209ec4269ef70503c)), closes [#1049](https://github.com/Crpaxton4/devcontainer-features/issues/1049)
+
 ## [6.1.0](https://github.com/Crpaxton4/devcontainer-features/compare/odoo-dev-plugin-v6.0.1...odoo-dev-plugin-v6.1.0) (2026-10-29)
 
 

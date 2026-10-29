@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.4.0](https://github.com/Crpaxton4/devcontainer-features/compare/odoo-orchestrator-plugin-v1.3.0...odoo-orchestrator-plugin-v1.4.0) (2026-10-29)
+
+
+### Features
+
+* **odoo-orchestrator:** answer job questions in the web UI and point run step 5 there ([#1314](https://github.com/Crpaxton4/devcontainer-features/issues/1314)) ([42fb120](https://github.com/Crpaxton4/devcontainer-features/commit/42fb120b8ee6cdd09ad1f18d9ec7d54b193ff872))
+
+
+### Bug Fixes
+
+* **odoo-orchestrator:** accept the legacy-task-runs batch id in friction, records and batch-done ([#1310](https://github.com/Crpaxton4/devcontainer-features/issues/1310)) ([35b8a79](https://github.com/Crpaxton4/devcontainer-features/commit/35b8a79b6c565738e9b703b0b3860398a8fab665))
+* **odoo-orchestrator:** record handled dead letters in their own column so batch-done no longer hides them ([#1312](https://github.com/Crpaxton4/devcontainer-features/issues/1312)) ([425f4d5](https://github.com/Crpaxton4/devcontainer-features/commit/425f4d5667552f973dd871d012527d4da09d14d2))
+
 ## [1.3.0](https://github.com/Crpaxton4/devcontainer-features/compare/odoo-orchestrator-plugin-v1.2.0...odoo-orchestrator-plugin-v1.3.0) (2026-10-29)
 
 
