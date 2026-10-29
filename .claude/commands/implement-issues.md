@@ -233,7 +233,9 @@ Print:
 - the skip list with reasons,
 - an explicit shared-file risk line naming what no worker may touch:
   `README.md`, `CHANGELOG.md`, `plugins/odoo-dev/CHANGELOG.md`, and
-  `.release-please-manifest.json`.
+  `.release-please-manifest.json`,
+- in auto mode, one line saying the merge train is a user-run handoff unless the
+  `permissions.allow` rule in Phase 8 is set.
 
 A wave table is **optional**. When you print one, compute it from the graph
 rather than authoring it: wave 1 is the roots, and a child enters the first
@@ -511,8 +513,19 @@ the text and decide. The three to recognise:
   cut a worktree on it, `rebase origin/main`, resolve, force-push, remove the
   worktree, then re-run the identical command. Two nodes hit this in one wave
   when several workers extended the same line of `install.sh`.
-- **`gh pr merge` denied by the permission classifier** → **degrade to
-  handoff**: print the exact command, wait for the user's "merged", re-run.
+- **The auto-mode classifier refusing the script invocation** ("Merge Without
+  Review") → the refusal lands on `stack-merge.sh` itself, before any
+  `gh pr merge` runs, so no `stack-merge:` line exists. Nothing was mutated. The
+  `allowed-tools` frontmatter cannot cover it: that grant lasts one turn, and
+  the train runs many turns later. Two paths. **(a)** The user adds
+  `Bash(/workspaces/devcontainer-features/.claude/commands/implement-issues/stack-merge.sh:*)`
+  to `permissions.allow` in their uncommitted `.claude/settings.local.json`;
+  the classifier is then not consulted and the session runs the train itself.
+  Never commit a settings file. **(b)** Without the rule, **degrade to
+  handoff**: print the exact command, the user runs it with the `!` prefix so
+  the output lands in the conversation, then read the exit code and re-derive
+  the stack from `gh` (below). After a partial train, re-run the identical
+  command.
 
 The bespoke exit codes:
 
