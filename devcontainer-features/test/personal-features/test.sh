@@ -391,6 +391,17 @@ check "gh-as-owner whoami reports the owner as authenticated when a token resolv
 check "gh-as-owner whoami never prints the token" bash -c \
   "! grep -qF '$GAO_TOKEN' \"$GAO_ROOT/whoami.out\""
 
+# A configured [github] account is for owners with no token of their own. The
+# stub holds a token for every user, so the owner is authenticated here and must
+# win over the account the config.toml names.
+mkdir -p "$GAO_ROOT/odoo-dev-home"
+printf '[github]\naccount = "otheraccount"\n' > "$GAO_ROOT/odoo-dev-home/config.toml"
+GAO_LOG="$GAO_ROOT/owner-first-calls" GAO_FAKE_TOKEN="$GAO_TOKEN" PATH="$GAO_BIN:$PATH" \
+  ODOO_DEV_HOME="$GAO_ROOT/odoo-dev-home" \
+  /usr/local/bin/gh-as-owner whoami "$GAO_REPO" > "$GAO_ROOT/owner-first.out" 2>&1 || true
+check "gh-as-owner whoami prefers an authenticated owner over the configured account" bash -c \
+  "grep -qxF 'owner:         testowner' \"$GAO_ROOT/owner-first.out\" && grep -qxF 'source:        owner of the origin remote' \"$GAO_ROOT/owner-first.out\""
+
 rm -rf "$GAO_ROOT"
 
 # CodeRabbit CLI (best-effort install; check the binary is present + on PATH)
