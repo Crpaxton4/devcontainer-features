@@ -1,5 +1,12 @@
 # Changelog
 
+## [9.2.1](https://github.com/Crpaxton4/devcontainer-features/compare/dispatcher-v9.2.0...dispatcher-v9.2.1) (2026-10-29)
+
+
+### Bug Fixes
+
+* **dispatcher:** let the unattended implement run use its tools and report its result ([#1286](https://github.com/Crpaxton4/devcontainer-features/issues/1286)) ([3000fd8](https://github.com/Crpaxton4/devcontainer-features/commit/3000fd87cea1ddcb3e006132101e72adf510db86))
+
 ## [9.2.0](https://github.com/Crpaxton4/devcontainer-features/compare/dispatcher-v9.1.0...dispatcher-v9.2.0) (2026-10-28)
 
 

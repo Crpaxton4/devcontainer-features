@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "usage_log"
-version = "9.2.0"
+version = "9.2.1"
 description = "Standalone, stdlib-only usage log: one SQLite line per use of a feature this repo owns."
 requires-python = ">=3.10"
 dependencies = []
