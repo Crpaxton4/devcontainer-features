@@ -72,6 +72,8 @@ BEHAVIOR_DEFAULTS: dict[str, Any] = {
     "resync_window_days": 30,
     "resync_authors": None,
 }
+GITHUB_ENV_VARS: dict[str, str] = {"account": "ODOO_GITHUB_ACCOUNT"}
+GITHUB_DEFAULTS: dict[str, Any] = {"account": None}
 
 _TRUTHY_VALUES = frozenset({"1", "true", "yes", "on"})
 _MODEL_IDS_HEADER = re.compile(r"^\s*\[model_ids\]\s*(#.*)?$")
@@ -314,8 +316,10 @@ class LocalConfig:
         behavior: Mapping[str, Any] | None = None,
         model_ids: Mapping[str, Any] | None = None,
         path: Path | None = None,
+        github: Mapping[str, Any] | None = None,
     ):
         self.path = path if path is not None else paths(resolve_home()).config_toml
+        self._github: dict[str, Any] = {**GITHUB_DEFAULTS, **(github or {})}
         self._connection: dict[str, Any] = {**CONNECTION_DEFAULTS, **(connection or {})}
         self._behavior: dict[str, Any] = {**BEHAVIOR_DEFAULTS, **(behavior or {})}
         # Coerced here so a directly built config rejects a bad id as loudly.
@@ -346,7 +350,15 @@ class LocalConfig:
             ),
             model_ids=_resolve_model_ids(data.get("model_ids", {}), env),
             path=path,
+            github=_resolve_section(
+                data.get("github", {}), GITHUB_ENV_VARS, GITHUB_DEFAULTS, env
+            ),
         )
+
+    @property
+    def github_account(self) -> str | None:
+        """Return the GitHub login that agents push and open PRs as, or ``None``."""
+        return str(self._github.get("account") or "").strip() or None
 
     @property
     def connection(self) -> Mapping[str, Any]:

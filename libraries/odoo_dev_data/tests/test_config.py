@@ -72,6 +72,21 @@ def test_file_wins_over_env(tmp_path):
     assert config.session_gap_mins == 20
 
 
+def test_github_account_unset_is_none(tmp_path):
+    assert _load(tmp_path).github_account is None
+
+
+def test_github_account_from_env_alone(tmp_path):
+    assert _load(tmp_path, ODOO_GITHUB_ACCOUNT="work").github_account == "work"
+
+
+def test_github_account_file_wins_over_env(tmp_path):
+    config = _load(
+        tmp_path, '[github]\naccount = "filed"\n', ODOO_GITHUB_ACCOUNT="work"
+    )
+    assert config.github_account == "filed"
+
+
 def test_empty_file_value_falls_through_to_env(tmp_path):
     config = _load(tmp_path, '[connection]\nurl = ""\n', ODOO_URL="https://env")
     assert config.connection["url"] == "https://env"

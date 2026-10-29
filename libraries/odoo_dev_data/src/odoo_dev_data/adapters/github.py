@@ -43,10 +43,15 @@ def _github_logins(config: Optional[LocalConfig], active: str) -> list[str]:
     """Return the GitHub logins to capture for (issue #378 item 4).
 
     The configured non-email identities; falls back to the authenticated
-    ``active`` login so a single-account user needs no config.
+    ``active`` login so a single-account user needs no config. The
+    ``[github] account`` the agents push as is added, so their PRs count.
     """
     configured = [a for a in (config.resync_authors if config else []) if "@" not in a]
-    return configured or [active]
+    logins = configured or [active]
+    account = config.github_account if config else None
+    if account and account not in logins:
+        logins.append(account)
+    return logins
 
 
 def _review_login(actor: dict) -> str:
