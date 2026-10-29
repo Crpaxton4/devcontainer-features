@@ -559,6 +559,24 @@ def test_mark_reported_is_idempotent(jobs):
     assert jobs.mark_reported([]) == 0
 
 
+def test_mark_handled_is_idempotent(jobs):
+    run_to_done(jobs, "j1", "1")
+    run_to_done(jobs, "j2", "2")
+    assert jobs.mark_handled(["j1", "j2", "nope"], now_us=T0 + 10) == 2
+    assert jobs.mark_handled(["j1", "j2"], now_us=T0 + 11) == 0
+    assert jobs.get("j1").handled_us == T0 + 10
+    assert jobs.mark_handled([]) == 0
+
+
+def test_handled_and_reported_marks_are_independent(jobs):
+    run_to_done(jobs, "j1", "1")
+    run_to_done(jobs, "j2", "2")
+    jobs.mark_handled(["j1"], now_us=T0 + 10)
+    jobs.mark_reported(["j2"], now_us=T0 + 11)
+    assert jobs.get("j1").reported_us is None
+    assert jobs.get("j2").handled_us is None
+
+
 def test_mark_friction_recorded_is_idempotent(jobs):
     run_to_done(jobs)
     assert jobs.mark_friction_recorded(["j1"], now_us=T0 + 10) == 1

@@ -11,11 +11,11 @@
     friction <batch_id>         record friction of the batch not yet recorded; print the count
     records <batch_id>          print the batch as a table
     batches                     print the finished batches not yet reported
-    batch-done <batch_id>       mark every job of a batch reported
+    batch-done <batch_id>       mark every job of a batch reported (not handled)
 
 The state root is ``$ODOO_DEV_HOME`` (``odoo_dev_data.home.resolve_home``). Briefs
-live under ``tasks/<task>/``; handled, friction and reported marks are columns of
-the job row in ``state.db``. Nothing here writes a timesheet.
+live under ``tasks/<task>/``; handled, friction and reported marks are separate
+columns of the job row in ``state.db``. Nothing here writes a timesheet.
 
 The linter is not the enforcement. The requirement line is semantic, and the
 command text carries it.
@@ -117,10 +117,10 @@ def lint(text: str) -> list[str]:
 
 
 def unhandled() -> list[dict]:
-    """Dead letters with no ``reported_us``, each with its approved brief."""
+    """Dead letters with no ``handled_us``, each with its approved brief."""
     out = []
     for job in reporting.dead_letters(resolve_home()):
-        if job.reported_us is None:
+        if job.handled_us is None:
             entry = {**reporting.job_entry(job), "repo": job.repo, "round": job.round}
             task = str(job.task_id)
             out.append(
@@ -135,6 +135,11 @@ def unhandled() -> list[dict]:
 def mark_reported(job_ids: list[str]) -> None:
     with JobStore(home=resolve_home()) as store:
         store.mark_reported(job_ids)
+
+
+def mark_handled(job_ids: list[str]) -> None:
+    with JobStore(home=resolve_home()) as store:
+        store.mark_handled(job_ids)
 
 
 def friction(batch_id: str) -> int:
@@ -214,7 +219,7 @@ VERBS = {
     "approve-job": (None, lambda *ids: approve_jobs(list(ids))),
     "lint": (1, _lint_file),
     "unhandled": (0, lambda: print(json.dumps(unhandled(), indent=2))),
-    "handled": (None, lambda *ids: mark_reported(list(ids))),
+    "handled": (None, lambda *ids: mark_handled(list(ids))),
     "friction": (1, lambda batch_id: print(friction(batch_id))),
     "records": (1, lambda batch_id: print(records(batch_id))),
     "batches": (
