@@ -3,6 +3,7 @@
 import json
 import sqlite3
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 from odoo_dev_data.jobs import DeadReason, JobState, JobStore
@@ -193,3 +194,20 @@ def test_usage_summary_without_a_file_is_empty(home):
     home.mkdir(parents=True, exist_ok=True)
     (home / "usage.db").write_bytes(b"")  # a database with no table
     assert reporting.usage_summary(home) == []
+
+
+def test_transcript_path_finds_the_session_file(tmp_path):
+    project = tmp_path / "projects" / "slug"
+    project.mkdir(parents=True)
+    (project / "s1.jsonl").write_text("{}")
+    assert reporting.transcript_path(tmp_path, "s1") == project / "s1.jsonl"
+    assert reporting.transcript_path(tmp_path, "s2") is None
+    assert reporting.transcript_path(tmp_path, "") is None
+    assert reporting.transcript_path(tmp_path / "absent", "s1") is None
+
+
+def test_claude_home_resolution_order(tmp_path):
+    both = {"DISPATCH_CLAUDE_HOME": "/a", "CLAUDE_CONFIG_DIR": "/b"}
+    assert reporting.claude_home(both) == Path("/a")
+    assert reporting.claude_home({"CLAUDE_CONFIG_DIR": "/b"}) == Path("/b")
+    assert reporting.claude_home({}) == Path.home() / ".claude"

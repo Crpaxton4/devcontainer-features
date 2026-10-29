@@ -103,8 +103,12 @@ services:
     environment:
       HOME: "${HOME:?HOME must be set}"
       ODOO_DEV_HOME: "${ODOO_DEV_HOME:-${HOME}/.config/odoo-dev}"
+      DISPATCH_CLAUDE_HOME: "${DISPATCH_CLAUDE_HOME:-${HOME}/.claude}"
     # The state root is read-write on purpose: a :ro bind breaks a WAL reader when
     # -wal and -shm are absent. The pages open SQLite with mode=ro and have no
     # write route.
+    # Only projects/ of the Claude home crosses, read-only, so no credential file
+    # enters the web UI. The live session panel reads the transcripts there.
     volumes:
       - "${ODOO_DEV_HOME:-${HOME}/.config/odoo-dev}:${ODOO_DEV_HOME:-${HOME}/.config/odoo-dev}"
+      - "${DISPATCH_CLAUDE_HOME:-${HOME}/.claude}/projects:${DISPATCH_CLAUDE_HOME:-${HOME}/.claude}/projects:ro"
