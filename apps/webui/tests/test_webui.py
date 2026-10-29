@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 
@@ -120,6 +122,41 @@ def test_only_get_routes():
 
 def test_post_is_refused(client):
     assert client.post("/jobs").status_code == 405
+
+
+def test_transcript_fragment_renders_the_tail(client, claude_home):
+    lines = [
+        {"type": "assistant", "message": {"content": [
+            {"type": "text", "text": "hello from claude"},
+            {"type": "tool_use", "name": "Bash", "input": {"command": "ls " + "x" * 300}},
+        ]}},
+        "{not json",
+        {"type": "user", "message": {"content": [
+            {"type": "tool_result", "content": "y" * 500},
+        ]}},
+        {"type": "summary"},
+    ]  # fmt: skip
+    text = "\n".join(l if isinstance(l, str) else json.dumps(l) for l in lines)
+    (claude_home / "projects" / "slug" / "sess-1.jsonl").write_text(text)
+    html = client.get("/jobs/j-running/transcript").get_data(as_text=True)
+    assert "hello from claude" in html and "[Bash]" in html
+    assert "x" * 150 in html and "x" * 300 not in html
+    assert "y" * 400 in html and "y" * 401 not in html
+    assert "Waiting" not in html
+
+
+def test_transcript_waits_for_the_session(client):
+    for job_id in ("j-pending", "j-running"):  # no session id / no file yet
+        html = client.get(f"/jobs/{job_id}/transcript").get_data(as_text=True)
+        assert "Waiting for the session transcript" in html
+    assert client.get("/jobs/nope/transcript").status_code == 404
+
+
+def test_detail_polls_the_transcript_only_while_running(client):
+    running = client.get("/jobs/j-running").get_data(as_text=True)
+    done = client.get("/jobs/j-done").get_data(as_text=True)
+    assert 'hx-trigger="load, every 2s"' in running
+    assert 'hx-trigger="load"' in done and "every 2s" not in done
 
 
 def test_htmx_is_vendored(client):

@@ -61,7 +61,7 @@ are the lines of your prompt.
    (the build derives the verdict from them) and `oca_alt` go into the one `enrich_<module>.json`. A module whose
    action is `replace` follows the Replace section of `references/porting-checklist.md`.
    End with `upgrade-state.sh <ARTIFACTS> mark <module> verdict --json <verdict>`.
-   Decision rule: when native is yes, or yes/partial with the gap closed by a documented
+   Decision rule: when native is yes, or partial with the gap closed by a documented
    configuration step (a field on a standard record, a setting, an operation-type option),
    drop the module on the target branch. Otherwise port in place with the minimum rewrite
    and record the gap in the notes of the record. Never stop for this decision.

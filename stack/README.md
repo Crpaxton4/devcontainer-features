@@ -60,6 +60,8 @@ is published on the loopback interface only. The pages are read-only:
 See `apps/webui/README.md` for the routes.
 
 The service mounts `ODOO_DEV_HOME` read-write (a `:ro` bind breaks a WAL reader).
+It also mounts `<Claude home>/projects` read-only, for the live session panel of the
+job page. No other file of the Claude home (so no credential) enters the web UI.
 It does not mount the docker socket. Stop it with
 `docker compose -p odoo-orchestrator stop webui`.
 

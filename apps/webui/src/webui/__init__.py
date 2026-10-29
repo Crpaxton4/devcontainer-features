@@ -22,6 +22,7 @@ PAGES = (
 def create_app() -> Flask:
     app = Flask(__name__)
     app.config["ODOO_DEV_HOME"] = reporting.state_home()
+    app.config["CLAUDE_HOME"] = reporting.claude_home()
     for blueprint, _label, _endpoint in PAGES:
         app.register_blueprint(blueprint)
 

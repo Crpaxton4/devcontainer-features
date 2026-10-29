@@ -480,7 +480,7 @@
 
   <figure>
     <div class="scroller">
-      <svg viewBox="0 0 960 700" role="img" aria-label="The system as built. On the host, the odoo-orchestrator plugin's run command reads Odoo through the org connector, shows each brief to you for approval, and calls dispatch.sh with the approved set as one JSON argument. dispatch.sh runs the dispatcher, a Python program that holds the singleton lock, the admission gate, the container lifecycle, the session, timing and the ending sequence. Beside it on disk sits the one state root, ODOO_DEV_HOME, with state.db, the locks and the task directories that hold the job bundles. Below the requirement line, one container per project runs claude dash p with the implement entry, the invariants inlined, and ODOO_UNATTENDED set to 1, which engages the guard hook in every fork. Two mounts cross the line: the host .claude directory and the state root. At the bottom, the job row feeds the sessionizer, which you review before a timesheet exists.">
+      <svg viewBox="0 0 960 700" role="img" aria-label="The system as built. On the host, the odoo-orchestrator plugin's run command reads Odoo through the org connector, shows each brief to you for approval, and calls dispatch.sh add with the approved set as one JSON argument. dispatch.sh starts the dispatcher, the singleton dispatcher service of the compose project odoo-orchestrator, drawn as a dashed zone inside the host area. The dispatcher is a Python program that holds the singleton lock, the admission gate, the container lifecycle, the session, timing and the ending sequence. Beside it on disk sits the one state root, ODOO_DEV_HOME, with state.db, the locks and the task directories that hold the job bundles. Below the requirement line, one container per project runs claude dash p with the implement entry, the invariants inlined, and ODOO_UNATTENDED set to 1, which engages the guard hook in every fork. Two mounts cross the line: the host .claude directory and the state root. At the bottom, the job row feeds the sessionizer, which you review before a timesheet exists.">
         <defs>
           <marker id="f2h" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--host)"/></marker>
           <marker id="f2k" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--cont)"/></marker>
@@ -505,10 +505,12 @@
         <text x="441" y="86" text-anchor="middle" font-family="var(--sans)" font-size="12.5" font-weight="600" fill="var(--host)">You</text>
         <text x="441" y="102" text-anchor="middle" font-family="var(--mono)" font-size="9" fill="var(--muted)">approve per task</text>
         <path d="M441 116 L441 132 L263 132 L263 146" fill="none" stroke="var(--host)" stroke-width="1.5" marker-end="url(#f2h)"/>
-        <text x="452" y="136" font-family="var(--mono)" font-size="9.5" fill="var(--host)">dispatch.sh run '[{repo,task,brief}]'</text>
+        <text x="452" y="136" font-family="var(--mono)" font-size="9.5" fill="var(--host)">dispatch.sh add '[{repo,task,brief}]'</text>
 
+        <rect x="28" y="142" width="470" height="128" rx="3" fill="none" stroke="var(--host)" stroke-width="1.5" stroke-dasharray="2 3"/>
+        <text x="490" y="266" text-anchor="end" font-family="var(--mono)" font-size="9" letter-spacing="0.6" fill="var(--host)">COMPOSE &#183; odoo-orchestrator</text>
         <rect x="36" y="150" width="454" height="108" rx="3" fill="var(--panel)" stroke="var(--host)" stroke-width="2"/>
-        <text x="52" y="172" font-family="var(--sans)" font-size="13.5" font-weight="600" fill="currentColor">The dispatcher &#183; Python</text>
+        <text x="52" y="172" font-family="var(--sans)" font-size="13.5" font-weight="600" fill="currentColor">The dispatcher service &#183; Python</text>
         <text x="300" y="172" font-family="var(--mono)" font-size="9" fill="var(--muted)">libraries/dispatcher</text>
         <text x="52" y="192" font-family="var(--sans)" font-size="10.5" fill="var(--ink-2)">lock &#183; admission on measured memory &#183; up, readiness, assert mounts</text>
         <text x="52" y="208" font-family="var(--sans)" font-size="10.5" fill="var(--ink-2)">exec the session &#183; clock &#183; deadline &#183; the ending sequence (section 17)</text>
@@ -1578,7 +1580,7 @@ tasks/&lt;task_id&gt;/jobs/&lt;job_id&gt;/
 
   <figure>
     <div class="scroller">
-      <svg viewBox="0 0 920 470" role="img" aria-label="The ending sequence, six steps left to right under a finally block. One: decide the cause from what the dispatcher saw, or success when a usable structured value arrived. Two: write the result to the job row. Three: collect the bundle and index it on the same row, which never raises. Four: reap the worktree inside the container, only if its branch is pushed and matches. Five: move the job to DONE or DEAD_LETTER with the detail. Six: the idle check, which stops the container when the project has nothing running and nothing pending. Above the sequence, three ways in: a clean exit, the deadline kill, and a stop request, and the two kill paths both kill the host process group and the container-side claude. Below, a note says a failure in step two is raised after step five, and failures in steps three, four and six change nothing.">
+      <svg viewBox="0 0 920 470" role="img" aria-label="The ending sequence, six steps left to right under a finally block. One: decide the cause from what the dispatcher saw, or success when a usable structured value arrived. Two: write the result to the job row. Three: collect the bundle and index it on the same row, which never raises. Four: reap the worktree inside the container, only if its branch is pushed and matches. Five: move the job to DONE or DEAD_LETTER with the detail. Six: the idle check, which stops the container when the project has nothing running and nothing pending. Above the sequence, three ways in: a clean exit, the deadline kill, and a stop request, and the two kill paths both kill the process group inside the dispatcher service and then run kill_in_container, a docker exec pkill of the claude process in the project container. The dispatcher service has a stop grace period of 90 seconds. Below, a note says a failure in step two is raised after step five, and failures in steps three, four and six change nothing.">
         <defs>
           <marker id="f10a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--host)"/></marker>
           <marker id="f10s" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--stop)"/></marker>
@@ -1589,7 +1591,8 @@ tasks/&lt;task_id&gt;/jobs/&lt;job_id&gt;/
         <text x="40" y="82" font-family="var(--mono)" font-size="9.5" fill="var(--muted)">EOF on the stream, exit code read</text>
         <rect x="316" y="40" width="284" height="60" rx="3" fill="var(--panel)" stroke="var(--stop)" stroke-width="1.5"/>
         <text x="332" y="62" font-family="var(--sans)" font-size="12.5" font-weight="600" fill="var(--stop)">the deadline fires</text>
-        <text x="332" y="82" font-family="var(--mono)" font-size="9.5" fill="var(--muted)">killpg on the host, pkill claude -p &lt;task&gt; inside</text>
+        <text x="332" y="82" font-family="var(--mono)" font-size="9.5" fill="var(--muted)">killpg, then docker exec pkill claude -p</text>
+        <text x="332" y="95" font-family="var(--mono)" font-size="9" fill="var(--muted)">kill_in_container &#183; stop_grace_period 90s</text>
         <rect x="622" y="40" width="274" height="60" rx="3" fill="var(--panel)" stroke="var(--stop)" stroke-width="1.5"/>
         <text x="638" y="62" font-family="var(--sans)" font-size="12.5" font-weight="600" fill="var(--stop)">a stop request (SIGINT, SIGTERM)</text>
         <text x="638" y="82" font-family="var(--mono)" font-size="9.5" fill="var(--muted)">the same two kills, then KILLED_BY_SIGNAL</text>
@@ -1651,7 +1654,7 @@ tasks/&lt;task_id&gt;/jobs/&lt;job_id&gt;/
         <text x="42" y="443" font-family="var(--sans)" font-size="11.5" fill="currentColor">the slot is free &#183; the job row is final &#183; the report line for this job carries the reap note, the bundle path and the missing list</text>
       </svg>
     </div>
-    <figcaption><b>Figure 10.</b> The sequence as <code>engine.py</code> runs it. The two kill paths are symmetric: the deadline and a stop request both kill the host process group and then the container-side process, because killing the host <code>devcontainer exec</code> does not reach the process it started inside. The reap moves inside the container, where the worktree's <code>.git</code> file resolves. <span class="lag">code lags · F8, F9</span></figcaption>
+    <figcaption><b>Figure 10.</b> The sequence as <code>engine.py</code> runs it. The two kill paths are symmetric: the deadline and a stop request both kill the process group of the <code>devcontainer exec</code> in the dispatcher service and then run <code>lifecycle.kill_in_container</code>, a <code>docker exec ... pkill</code>, because killing that <code>devcontainer exec</code> does not reach the process it started inside. The compose service has <code>stop_grace_period: 90s</code>, longer than the kill wait, so a stop can finish both kills. The reap moves inside the container, where the worktree's <code>.git</code> file resolves. <span class="lag">code lags · F8, F9</span></figcaption>
   </figure>
 
   <div class="tbl">
