@@ -274,6 +274,9 @@ check "eza is installed" eza --version
 check "zoxide is installed" zoxide --version
 check "tldr is installed" tldr --version
 check "qsv is installed" qsv --version
+# record-tours / stitch_tours.py (#1049): a full ffmpeg and the Roboto fonts
+check "ffmpeg is installed" ffmpeg -version
+check "Roboto font is installed" test -f /usr/share/fonts/truetype/roboto/unhinted/RobotoTTF/Roboto-Regular.ttf
 # The shell linter, #964 - the one CI lints install.sh with. Both halves matter:
 # that it exists at all (it used to be absent, so the "sanctioned local gate"
 # naming it could not be run), and that it is the PINNED version, since a local
