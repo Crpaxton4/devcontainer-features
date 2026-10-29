@@ -13,6 +13,12 @@ tasks, hardens each into a brief, takes approval per task, and queues the approv
 set on the dispatcher. A brief states behaviour and outcome. It never names a
 file, module, model, method or build step: the container decides how.
 
+## Skills
+
+`/odoo-orchestrator:report-incident [description]` (`skills/report-incident/SKILL.md`)
+drafts a GitHub issue for an incident, with a current environment block and no
+private data, and files it after you approve.
+
 ## Scripts (`scripts/`)
 
 | Script | Does |
