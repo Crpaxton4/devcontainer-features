@@ -39,6 +39,10 @@ Required: `DISPATCH_REPOS_DIR` (or `REPOS_DIR`) and `DISPATCH_CONFIG_ROOT`.
 
 `ODOO_DEV_HOME` sets the state root. A second dispatcher needs a second root.
 
+## GitHub account
+
+The account the agents push and open pull requests as is `[github] account` in the state root `config.toml`, or `ODOO_GITHUB_ACCOUNT`. Log in both accounts to the host `gh` (`gh auth status` lists them). Do not use `gh auth switch`. At admission the dispatcher runs `gh auth token --user <account>` in the container. A job with no account, or with an account that has no token, is dead-lettered as `CONTAINER_START_FAILED` with the setting named.
+
 ## Job bundle
 
 `$ODOO_DEV_HOME/tasks/<task_id>/jobs/<job_id>/` holds the files of one job. When

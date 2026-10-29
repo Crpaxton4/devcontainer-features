@@ -72,6 +72,7 @@ set -euo pipefail
 
 plugin_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 JSON_GET="$plugin_root/scripts/json-get.sh"
+. "$plugin_root/scripts/_gh-account.sh"
 
 [ $# -ge 4 ] || { echo "usage: release-manifest.sh <owner/repo> <repo_root> <from> <to> [--max-commits N]" >&2; exit 2; }
 slug="$1"; repo_root="$2"; from="$3"; to="$4"; shift 4
@@ -86,6 +87,7 @@ done
 git -C "$repo_root" rev-parse --is-inside-work-tree >/dev/null 2>&1 \
   || { echo "not a git work tree: $repo_root" >&2; exit 2; }
 command -v gh >/dev/null 2>&1 || { echo "gh is not installed" >&2; exit 2; }
+gh_auth_as_account || exit 1
 
 git -C "$repo_root" fetch --quiet origin 2>/dev/null \
   || echo "WARN could not fetch origin — computing the delta from local refs only" >&2

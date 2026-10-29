@@ -172,6 +172,12 @@ class JobRun:
         lifecycle.assert_mounts(
             engine.shell, self.settings, job.repo, container_id, env
         )
+        lifecycle.require_gh_account(
+            engine.shell,
+            container_id,
+            lifecycle.configured_github_account(self.settings),
+            env,
+        )
         lifecycle.wait_ready(engine.shell, container_id, env)
 
     # -- phase 2: the session (worker thread) ---------------------------

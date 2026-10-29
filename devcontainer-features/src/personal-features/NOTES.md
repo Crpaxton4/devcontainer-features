@@ -197,6 +197,7 @@ gh-as-owner whoami    [<repo-path>]
 ```
 
 - **Owner** — `OWNER/REPO` is parsed out of `git remote get-url origin` and `OWNER` is the identity used. An argument can be stale; a remote cannot. This is also why there is no write-verb/read-verb list: a token is only ever used for the repo whose owner it belongs to.
+- **Configured account** — when `[github] account` is set in the odoo-dev `config.toml` (or `ODOO_GITHUB_ACCOUNT`, used when the file has no value), that login is used instead of the remote owner. This is how an agent acts as a work account on a repo owned by an organization; `whoami` prints which source won.
 - **Token** — resolved with `gh auth token --user <owner>` *inside the script*, kept in a shell variable, and exported to the single child process that needs it. It is never an argument, never written to a file, never put in a URL, and never written into any `git config`. For `push`, `credential.helper='!gh auth git-credential'` is passed with `git -c`, per command, so nothing is persisted into a `.git/config` that sibling worktrees share.
 - **No fallback** — an owner with no authenticated account is exit 2 with an actionable message, never a silent fall back to whichever account happens to be active. Landing work under the wrong identity is the failure this replaces.
 - **`<repo-path>`** — optional everywhere, defaults to the current directory. It is only recognised when it contains a `/` (or is `.` / `..`) **and** names an existing directory, so a branch name or a `gh` subcommand can never be swallowed as one.

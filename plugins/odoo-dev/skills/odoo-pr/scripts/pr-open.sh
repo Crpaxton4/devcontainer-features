@@ -33,6 +33,7 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUMP_PY="$HERE/../../odoo-devcontainer/scripts/bump_manifest_version.py"
 JSON_GET="$HERE/../../../scripts/json-get.sh"
+. "$HERE/../../../scripts/_gh-account.sh"
 
 [ $# -ge 3 ] || { echo "usage: pr-open.sh <worktree> <owner/repo> <base> --title T --body-file F [--assign-me] [--no-push] [--no-bump]" >&2; exit 2; }
 worktree="$1"; slug="$2"; base="$3"; shift 3
@@ -137,10 +138,15 @@ EOF
 
 [ "$do_bump" = false ] || bump_manifests
 
+gh_auth_as_account || exit 1
+
 if [ "$do_push" = true ]; then
   # -u so later pushes from this worktree need no arguments, and so `gh pr list
   # --head` resolves against a branch that actually exists on the remote.
-  git -C "$worktree" push -u origin "HEAD:$head" >&2
+  # With an account set, git takes GH_TOKEN through the gh credential helper.
+  push_cfg=()
+  [ -z "$(gh_account)" ] || push_cfg=(-c "credential.helper=!gh auth git-credential")
+  git -C "$worktree" ${push_cfg[@]+"${push_cfg[@]}"} push -u origin "HEAD:$head" >&2
 fi
 
 existing="$(gh pr list --repo "$slug" --head "$head" --state open \

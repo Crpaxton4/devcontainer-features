@@ -114,16 +114,42 @@ slug_of() {
         sed -E 's#^(https?://[^/]+/|git@[^:]+:|ssh://git@[^/]+/)##; s#\.git$##; s#/$##'
 }
 
+# Sets ACCOUNT and SOURCE: the `[github] account` of the odoo-dev config.toml,
+# else ODOO_GITHUB_ACCOUNT (the order LocalConfig uses), else the remote owner
+# passed as $1. The odoo-dev plugin does the same lookup in _gh-account.sh.
+resolve_account() {
+    local home=${ODOO_DEV_HOME:-$HOME/.config/odoo-dev}
+    ACCOUNT=$(python3 -c '
+import sys, tomllib
+try:
+    with open(sys.argv[1], "rb") as f:
+        print(tomllib.load(f).get("github", {}).get("account") or "")
+except Exception:
+    pass
+' "$home/config.toml" 2>/dev/null || true)
+    SOURCE="[github] account in $home/config.toml"
+    if [[ -z $ACCOUNT && -n ${ODOO_GITHUB_ACCOUNT:-} ]]; then
+        ACCOUNT=$ODOO_GITHUB_ACCOUNT
+        SOURCE=ODOO_GITHUB_ACCOUNT
+    fi
+    if [[ -z $ACCOUNT ]]; then
+        ACCOUNT=$1
+        SOURCE="owner of the origin remote"
+    fi
+}
+
 # Resolving the token is also the check that the account exists. `gh auth token
 # --user` exits nonzero for an unknown or unauthenticated owner, and the guard
 # below stops here rather than falling back to whichever account happens to be
 # active - the fallback being exactly how work has landed under the wrong
 # identity.
 auth_as() {
-    local owner=$1 token
+    local token
+    resolve_account "$1"
+    local owner=$ACCOUNT
     token=$(gh auth token --user "$owner") ||
-        die "no authenticated gh account for owner '$owner' (gh auth login --user $owner)"
-    [[ -n $token ]] || die "gh auth token returned empty for owner '$owner'"
+        die "no authenticated gh account '$owner' from $SOURCE (gh auth login --user $owner)"
+    [[ -n $token ]] || die "gh auth token returned empty for account '$owner'"
     export GH_TOKEN=$token
 }
 
@@ -223,7 +249,8 @@ whoami)
     require_repo
 
     SLUG=$(slug_of)
-    OWNER=${SLUG%%/*}
+    resolve_account "${SLUG%%/*}"
+    OWNER=$ACCOUNT
     if gh auth token --user "$OWNER" >/dev/null 2>&1; then
         AUTHENTICATED=yes
     else
@@ -231,6 +258,7 @@ whoami)
     fi
     printf 'repo:          %s\n' "$SLUG"
     printf 'owner:         %s\n' "$OWNER"
+    printf 'source:        %s\n' "$SOURCE"
     printf 'checkout:      %s\n' "$REPO_PATH"
     printf 'authenticated: %s\n' "$AUTHENTICATED"
     [[ $AUTHENTICATED == yes ]] || exit 2

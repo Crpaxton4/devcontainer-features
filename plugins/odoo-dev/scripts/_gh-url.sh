@@ -35,6 +35,8 @@
 # Sourced as:
 #   . "<plugin root>/scripts/_gh-url.sh"
 
+. "$(dirname "${BASH_SOURCE[0]}")/_gh-account.sh"
+
 # gh_path_segment <value> -> percent-encoded value, safe as ONE path segment.
 #
 # Keeps the RFC 3986 unreserved set and escapes everything else, byte by byte,
@@ -80,6 +82,7 @@ gh_path_segment() {
 # and '.' in a name are regex metacharacters waiting to do that quietly.
 gh_branch_exists() {
   local slug="$1" branch="$2" names
+  gh_auth_as_account || return 2
   names="$(gh api "repos/$slug/branches" --paginate --jq '.[].name' 2>/dev/null)" || return 2
   printf '%s\n' "$names" | grep -Fxq -- "$branch"
 }

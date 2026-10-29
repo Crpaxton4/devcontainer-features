@@ -609,6 +609,12 @@ class TestSyncGithub(unittest.TestCase):
             (lambda c: c[-1] == "repos/other/repo/issues/9/comments", self._COMMENTS),
         ]
 
+    def test_github_account_joins_the_logins(self) -> None:
+        config = LocalConfig(github={"account": "work"})
+        self.assertEqual(ghmod._github_logins(config, "octocat"), ["octocat", "work"])
+        config = LocalConfig(github={"account": "octocat"})
+        self.assertEqual(ghmod._github_logins(config, "octocat"), ["octocat"])
+
     def test_captures_prs_reviews_and_comments(self) -> None:
         state = _tmp_state()
         with patch.object(subprocess, "run", _fake_run(self._routes())):

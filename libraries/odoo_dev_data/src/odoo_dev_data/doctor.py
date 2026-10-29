@@ -11,6 +11,7 @@ import json
 import os
 import sqlite3
 import stat
+import subprocess
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -91,6 +92,33 @@ def _config_check(path: Path, env: Mapping[str, str]) -> Check:
 
 
 _CONN_KEYS = ("url", "db", "username")
+
+
+def _github_account_check(path: Path, env: Mapping[str, str]) -> Check:
+    """Report the configured GitHub account and whether gh holds a token for it."""
+    try:
+        account = LocalConfig.load(path=path, env=env).github_account
+    except Exception:  # config.toml reports its own parse error
+        return Check("github account", NOTE, "config.toml unreadable")
+    if not account:
+        return Check(
+            "github account",
+            NOTE,
+            "[github] account unset; agents use the active gh account",
+        )
+    try:
+        done = subprocess.run(
+            ["gh", "auth", "token", "--user", account],
+            capture_output=True,
+            timeout=10,
+            check=False,
+        )
+        found = done.returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        found = False
+    if found:
+        return Check("github account", OK, f"{account}: gh has a token")
+    return Check("github account", FAIL, f"{account}: gh has no token for this login")
 
 
 def _repo_map_check(path: Path) -> Check:
@@ -201,6 +229,7 @@ def _file_checks(
     state, version = _state_db_check(layout.state_db)
     checks = [
         _config_check(layout.config_toml, env),
+        _github_account_check(layout.config_toml, env),
         _repo_map_check(layout.repo_map),
         state,
         _usage_db_check(layout.usage_db),

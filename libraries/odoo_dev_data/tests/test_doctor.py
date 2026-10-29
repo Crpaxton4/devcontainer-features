@@ -77,6 +77,29 @@ def test_config_without_url_is_a_note(tmp_path):
     assert (check.status, check.detail) == ("note", "no url resolved")
 
 
+def test_github_account_unset_is_a_note(tmp_path):
+    check = by_name(doctor(tmp_path, env={}))["github account"]
+    assert check.status == "note"
+    assert "[github] account unset" in check.detail
+
+
+@pytest.mark.parametrize(("code", "status"), [(0, "ok"), (1, "fail")])
+def test_github_account_token_check(tmp_path, monkeypatch, code, status):
+    calls = []
+
+    def fake_run(cmd, **_kwargs):
+        calls.append(cmd)
+        return subprocess.CompletedProcess(cmd, code, b"", b"")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    check = by_name(doctor(tmp_path, env={"ODOO_GITHUB_ACCOUNT": "work"}))[
+        "github account"
+    ]
+    assert check.status == status
+    assert "work" in check.detail
+    assert calls == [["gh", "auth", "token", "--user", "work"]]
+
+
 def test_broken_files_fail(tmp_path):
     (tmp_path / "config.toml").write_text("= not toml [")
     (tmp_path / "repo-map.json").write_text("{nope")
