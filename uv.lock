@@ -2631,7 +2631,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "markdown-it-py", specifier = ">=3.0.0" },
-    { name = "markitdown", extras = ["docx", "pdf"], specifier = ">=0.1.6" },
+    { name = "markitdown", extras = ["docx", "pdf"], specifier = ">=0.1.9" },
     { name = "odoo-client", editable = "libraries/odoo_client" },
     { name = "odoo-dev-data", editable = "libraries/odoo_dev_data" },
 ]
