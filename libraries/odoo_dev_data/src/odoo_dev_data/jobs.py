@@ -154,6 +154,7 @@ class Job:
     cost_usd: float = 0.0
     approved_us: int | None = None
     reported_us: int | None = None
+    handled_us: int | None = None
     friction_recorded_us: int | None = None
     stop_requested_us: int | None = None
     question_count: int = 0
@@ -514,6 +515,10 @@ class JobStore:
     ) -> int:
         """Set ``reported_us`` where it is NULL; return the rows changed."""
         return self._mark("reported_us", job_ids, now_us)
+
+    def mark_handled(self, job_ids: Iterable[str], *, now_us: int | None = None) -> int:
+        """Set ``handled_us`` where it is NULL; return the rows changed."""
+        return self._mark("handled_us", job_ids, now_us)
 
     def mark_friction_recorded(
         self, job_ids: Iterable[str], *, now_us: int | None = None

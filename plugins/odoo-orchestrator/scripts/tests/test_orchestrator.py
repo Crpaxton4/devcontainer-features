@@ -2,6 +2,7 @@
 
 import contextlib
 import io
+import json
 import os
 import sys
 import tempfile
@@ -231,6 +232,21 @@ class Reports(Base):
     def test_bad_batch_id_is_a_clean_error(self):
         for verb in ("friction", "records", "batch-done"):
             self.assertEqual(self.run_main(verb, "../x")[0], 2, verb)
+
+    def test_dead_letter_stays_unhandled_after_batch_done(self):
+        self.seed()
+        self.assertEqual(self.run_main("batch-done", A)[0], 0)
+        self.assertIsNotNone(self.job("j2").reported_us)
+        self.assertIsNone(self.job("j2").handled_us)
+        listed = json.loads(self.run_main("unhandled")[1])
+        self.assertEqual([x["job_id"] for x in listed], ["j2"])
+
+    def test_handled_removes_the_letter_and_keeps_the_batch_pending(self):
+        self.seed()
+        self.assertEqual(self.run_main("handled", "j2")[0], 0)
+        self.assertEqual(json.loads(self.run_main("unhandled")[1]), [])
+        self.assertIsNone(self.job("j2").reported_us)
+        self.assertEqual(self.run_main("batches")[1].split(), [A])
 
     def test_legacy_batch_id_is_accepted_by_every_batch_verb(self):
         self.submit("j1", "7", batch=LEGACY)

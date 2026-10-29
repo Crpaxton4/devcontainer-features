@@ -123,4 +123,9 @@ CREATE TABLE jobs (
             "CREATE INDEX idx_jobs_state ON jobs(state, submitted_us)",
         ),
     ),
+    Migration(
+        3,
+        "jobs_handled",
+        ("ALTER TABLE jobs ADD COLUMN handled_us INTEGER",),
+    ),
 )

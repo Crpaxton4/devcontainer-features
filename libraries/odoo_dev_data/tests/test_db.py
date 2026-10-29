@@ -39,9 +39,13 @@ def test_connect_creates_state_db_and_applies_both_migrations(home):
     conn = connect()
     assert (home / "state.db").is_file()
     ledger = _ledger(conn)
-    assert [(v, n) for v, n, _ in ledger] == [(1, "events"), (2, "jobs")]
+    assert [(v, n) for v, n, _ in ledger] == [
+        (1, "events"),
+        (2, "jobs"),
+        (3, "jobs_handled"),
+    ]
     assert all(applied > 0 for _, _, applied in ledger)
-    assert schema_version(conn) == 2
+    assert schema_version(conn) == 3
 
 
 def test_second_connect_applies_nothing(home):
