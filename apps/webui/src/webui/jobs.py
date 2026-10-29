@@ -12,10 +12,11 @@ bp = Blueprint("jobs", __name__)
 BUNDLE_FILES = ("envelope.json", "session.jsonl", "STOP")
 
 
-#: Transcript panel limits: entries shown, and characters kept per tool input/result.
+#: Raw lines of the live transcript shown while the job runs.
 TRANSCRIPT_TAIL = 80
-TOOL_INPUT_MAX = 200
-TOOL_RESULT_MAX = 400
+
+#: Job states in which the stream panel keeps polling.
+POLLING_STATES = ("PENDING", "RUNNING")
 
 
 def _job(job_id: str):
@@ -56,49 +57,33 @@ def detail(job_id: str):
     )
 
 
-def _block_text(block) -> str:
-    """One readable line for a transcript content block, or "" to skip it."""
-    if isinstance(block, str):
-        return block
-    kind = block.get("type")
-    if kind == "text":
-        return block.get("text", "")
-    if kind == "tool_use":
-        summary = json.dumps(block.get("input", {}), ensure_ascii=False)
-        return f"[{block.get('name', '?')}] {summary[:TOOL_INPUT_MAX]}"
-    if kind == "tool_result":
-        content = block.get("content", "")
-        if isinstance(content, list):
-            content = " ".join(
-                b.get("text", "") for b in content if isinstance(b, dict)
-            )
-        return f"-> {str(content)[:TOOL_RESULT_MAX]}"
-    return ""
-
-
-def _transcript_lines(path: Path) -> list[str]:
-    """The last TRANSCRIPT_TAIL renderable entries of a transcript file."""
-    out = []
-    for raw in path.read_text(encoding="utf-8", errors="replace").splitlines():
-        try:
-            message = json.loads(raw).get("message")
-        except (ValueError, AttributeError):
-            continue
-        content = message.get("content") if isinstance(message, dict) else None
-        blocks = [content] if isinstance(content, str) else content or []
-        text = "\n".join(t for t in map(_block_text, blocks) if t.strip())
-        if text:
-            out.append(text)
-    return out[-TRANSCRIPT_TAIL:]
+def _stream_lines(job) -> list[str] | None:
+    """Raw session lines: the live tail while the job runs, else the bundle file."""
+    if job.state.value == "RUNNING":
+        path = reporting.transcript_path(
+            current_app.config["CLAUDE_HOME"], job.session_id
+        )
+        tail = TRANSCRIPT_TAIL
+    else:
+        bundle = _bundle(job)
+        path = bundle / "session.jsonl" if bundle else None
+        tail = None
+    if path is None or not path.is_file():
+        return None
+    lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    return lines[-tail:] if tail else lines
 
 
 @bp.get("/jobs/<job_id>/transcript")
 def transcript(job_id: str):
-    """The tail of the live session transcript as an HTML fragment."""
+    """The session stream as an HTML fragment that polls until the job ends."""
     job = _job(job_id)
-    path = reporting.transcript_path(current_app.config["CLAUDE_HOME"], job.session_id)
-    lines = _transcript_lines(path) if path else None
-    return render_template("_transcript.html", lines=lines)
+    return render_template(
+        "_transcript.html",
+        lines=_stream_lines(job),
+        polling=job.state.value in POLLING_STATES,
+        job_id=job.job_id,
+    )
 
 
 @bp.get("/jobs/<job_id>/files/<name>")

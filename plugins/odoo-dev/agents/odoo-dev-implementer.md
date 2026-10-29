@@ -50,9 +50,17 @@ to.
    Otherwise run `/odoo-dev:test <task id>` with no session id.
 4. Iterate. Give the failure lines to `/odoo-dev:task <task id>`. Run the test stage
    again, with the same session id. Stop the loop at three red test runs and report the failure.
-5. Pull request. Run `/odoo-dev:pr <task id>` only after a green test run.
+5. Standards. After a green test run, run the CHECK script from the command
+   preamble: `<CHECK path> <worktree> <base branch>`. Each finding line is
+   `file:line rule message`. On findings, give them to `/odoo-dev:task <task id>`,
+   then run the test stage again and the check again. This loop has the same cap of
+   three attempts. If findings remain after the cap, do not open the pull request.
+   Report outcome `partial` and put each finding line in `tests.failures`.
+6. Pull request. Run `/odoo-dev:pr <task id>` only after a green test run and a
+   clean check.
 
-A failing test is the result of the task. Report it in the status. It is not friction.
+A failing test or a failing check is the result of the task. Report it in the
+outcome. It is not friction.
 
 ## Never stop to ask
 
@@ -114,7 +122,7 @@ repeat here because they cost the most when broken.
 End with exactly this and nothing after it:
 
 ```
-status: done | failed
+status: done | blocked | partial
 pull request: <url>, or none
 questions: <number of open questions recorded>
 <one sentence, 25 words or fewer: the result, or the environment failure>
