@@ -12,7 +12,7 @@ dependencies = []
 [dependency-groups]
 static-analysis = [
     "black>=26.5.1",
-    "complexipy>=6.0.1",
+    "complexipy>=8.3.0",
     "import-linter>=2.3",
     "pygount>=3.2.0",
     "radon>=6.0.1",
