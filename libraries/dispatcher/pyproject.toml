@@ -19,7 +19,7 @@ test = [
 ]
 static-analysis = [
     "black>=26.5.1",
-    "complexipy>=6.0.1",
+    "complexipy>=8.3.0",
 ]
 
 [project.scripts]
